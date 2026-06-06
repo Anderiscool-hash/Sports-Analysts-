@@ -1,0 +1,29 @@
+# Copy to config/config.yaml (gitignored) and adjust.
+
+# paper = no real orders, logs intended fills.  live = real orders (gated).
+mode: paper
+confirm_live: false        # second switch required for live; keep false to be safe
+
+bankroll: 100.0            # units = USDC; only meaningful in live mode
+max_stake: 5.0             # hard cap per single entry
+max_daily_loss: 20.0       # kill-switch: stop trading after this much realized loss
+kelly_fraction: 0.25       # fractional Kelly (0.25 = quarter Kelly)
+
+edge:
+  min_edge: 0.04           # require model_p - price >= 4% before considering a bet
+  dip_threshold: 0.05      # price must drop >= 5% to count as a "dip"
+  rebound_ticks: 1         # ticks of upward move needed to confirm the bottom
+
+loop:
+  poll_seconds: 5          # how often to re-check game + market state
+
+model:
+  path: models/live_winprob.joblib   # falls back to logistic model if missing
+
+# Polymarket market selection for the current game (filled per game).
+market:
+  gamma_host: https://gamma-api.polymarket.com
+  # Either set a known market slug/id, or let the loop search by team names.
+  market_slug: ""
+  home_team: ""
+  away_team: ""

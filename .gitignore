@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+
+# Env / secrets
+.env
+*.key
+config/config.yaml
+config/secrets.yaml
+
+# Data caches / artifacts
+data/raw/
+data/processed/
+data/cache/
+*.parquet
+*.sqlite
+*.db
+models/*.pkl
+models/*.joblib
+
+# Notebooks
+.ipynb_checkpoints/
+
+# Logs
+logs/
+*.log
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test / coverage
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+.ruff_cache/
