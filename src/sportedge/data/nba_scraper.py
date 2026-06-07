@@ -6,7 +6,8 @@ Live: read the current game's score / clock / period into a GameState.
 
 nba_api is imported lazily inside functions so this module imports fine even before
 the dependency is installed. Endpoints can be flaky / rate-limited, hence tenacity
-retries. SCOREMARGIN orientation is validated against the known final result.
+retries. Uses PlayByPlayV3 (V2 was deprecated and now returns empty data); V3 gives
+labeled scoreHome/scoreAway directly, so no score-orientation guessing is needed.
 """
 
 from __future__ import annotations
@@ -29,14 +30,6 @@ TRAINING_COLUMNS = [
     "pre_game_home_prob",
     "home_win",
 ]
-
-
-def _pctime_to_seconds(pctime: str) -> float:
-    """'MM:SS' game clock string -> seconds left in the period."""
-    if not pctime or ":" not in pctime:
-        return 0.0
-    mm, ss = pctime.split(":")
-    return int(mm) * 60 + float(ss)
 
 
 def _iso_clock_to_seconds(clock: str) -> float:
@@ -64,55 +57,44 @@ def list_games(season: str, season_type: str = "Playoffs") -> pd.DataFrame:
 
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, max=10))
 def _playbyplay(game_id: str) -> pd.DataFrame:
-    from nba_api.stats.endpoints import playbyplayv2
+    from nba_api.stats.endpoints import playbyplayv3
 
-    return playbyplayv2.PlayByPlayV2(game_id=game_id).get_data_frames()[0]
+    # V3's PlayByPlay set carries labeled scoreHome / scoreAway and an ISO clock.
+    return playbyplayv3.PlayByPlayV3(game_id=game_id).play_by_play.get_data_frame()
 
 
 def game_training_rows(game_id: str, home_won: bool) -> pd.DataFrame:
     """Convert one game's play-by-play into labeled state rows.
 
-    SCOREMARGIN is the home margin; its final sign is checked against `home_won`
-    and flipped if the source orientation disagrees.
+    PlayByPlayV3 reports scoreHome / scoreAway directly, so the home margin is
+    unambiguous and no orientation check against `home_won` is needed.
     """
     pbp = _playbyplay(game_id)
     rows: list[dict] = []
-    margins: list[int] = []
-    parsed: list[tuple[int, float, int]] = []  # (period, secs_remaining, margin)
 
     for _, ev in pbp.iterrows():
-        margin = ev.get("SCOREMARGIN")
-        if margin in (None, "", "TIE"):
-            margin = 0
         try:
-            margin = int(margin)
+            # Non-scoring plays carry "" for the running score; treat as 0.
+            home_score = int(ev.get("scoreHome") or 0)
+            away_score = int(ev.get("scoreAway") or 0)
         except (TypeError, ValueError):
             continue
-        period = int(ev.get("PERIOD", 1) or 1)
-        secs = regulation_seconds_remaining(period, _pctime_to_seconds(ev.get("PCTIMESTRING", "")))
-        margins.append(margin)
-        parsed.append((period, secs, margin))
-
-    if not parsed:
-        return pd.DataFrame(columns=TRAINING_COLUMNS)
-
-    # Orientation check: last non-zero margin should agree with who won.
-    last_nonzero = next((m for m in reversed(margins) if m != 0), 0)
-    flip = (last_nonzero > 0) != home_won and last_nonzero != 0
-
-    for period, secs, margin in parsed:
-        m = -margin if flip else margin
+        period = int(ev.get("period", 1) or 1)
+        secs = regulation_seconds_remaining(period, _iso_clock_to_seconds(ev.get("clock", "")))
         rows.append(
             {
                 "game_id": game_id,
-                "home_score": max(m, 0),  # only the diff matters to the model
-                "away_score": max(-m, 0),
+                "home_score": home_score,
+                "away_score": away_score,
                 "period": period,
                 "seconds_remaining": secs,
                 "pre_game_home_prob": HOME_PRIOR,
                 "home_win": int(home_won),
             }
         )
+
+    if not rows:
+        return pd.DataFrame(columns=TRAINING_COLUMNS)
     return pd.DataFrame(rows, columns=TRAINING_COLUMNS)
 
 
