@@ -13,6 +13,9 @@ FEATURE_NAMES = [
     "diff_x_invtime",  # lead leverage: a lead matters more as the clock shrinks
     "pre_game_home_prob",
     "period",
+    "home_recent_net_rating",
+    "away_recent_net_rating",
+    "recent_net_rating_diff",
 ]
 
 
@@ -25,6 +28,9 @@ def state_to_features(state: GameState) -> dict[str, float]:
         "diff_x_invtime": float(state.score_diff) * inv_time,
         "pre_game_home_prob": float(state.pre_game_home_prob),
         "period": float(state.period),
+        "home_recent_net_rating": float(state.home_recent_net_rating),
+        "away_recent_net_rating": float(state.away_recent_net_rating),
+        "recent_net_rating_diff": float(state.recent_net_rating_diff),
     }
 
 

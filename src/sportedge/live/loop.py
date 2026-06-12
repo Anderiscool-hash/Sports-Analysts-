@@ -15,6 +15,7 @@ from rich.table import Table
 from sportedge.betting.executor import make_executor
 from sportedge.betting.strategy import Strategy
 from sportedge.config import load_config, load_secrets
+from sportedge.data.isports import get_live_state as get_isports_live_state
 from sportedge.data.nba_scraper import get_live_state
 from sportedge.market.edge import BottomDetector, edge
 from sportedge.market.polymarket import PolymarketClient
@@ -26,10 +27,17 @@ console = Console()
 def _home_token_index(outcomes: list[str], home_team: str) -> int:
     """Pick the CLOB token whose outcome refers to the home team; default 0."""
     home = home_team.lower()
-    for i, o in enumerate(outcomes):
-        if home and home in str(o).lower():
+    for i, outcome in enumerate(outcomes):
+        if home and home in str(outcome).lower():
             return i
     return 0
+
+
+def _live_state(home_team: str, away_team: str):
+    state = get_live_state(home_team, away_team, 0.60)
+    if state is not None:
+        return state
+    return get_isports_live_state(home_team, away_team, 0.60)
 
 
 def run(mode: str | None = None, config_path: str = "config/config.yaml") -> None:
@@ -45,7 +53,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
     executor = make_executor(cfg, secrets)
 
     console.rule(
-        f"[bold]SportEdge live loop[/] — mode=[bold]{executor.mode}[/] "
+        f"[bold]SportEdge live loop[/] - mode=[bold]{executor.mode}[/] "
         f"model={'trained' if model.is_trained else 'logistic-fallback'}"
     )
     if executor.mode == "live":
@@ -62,13 +70,18 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
             idx = _home_token_index(market.outcomes, cfg.market.home_team)
             token_id = market.token_ids[min(idx, len(market.token_ids) - 1)]
             console.print(f"Market: [cyan]{market.question or market.slug}[/]  token={token_id}")
-    except Exception as exc:  # noqa: BLE001 — degrade to model-only display
+    except Exception as exc:  # noqa: BLE001 - degrade to model-only display
         console.print(f"[yellow]Market lookup failed ({exc}); running model-only.[/]")
 
     while True:
-        state = get_live_state(cfg.market.home_team, cfg.market.away_team, 0.60)
+        try:
+            state = _live_state(cfg.market.home_team, cfg.market.away_team)
+        except Exception as exc:  # noqa: BLE001
+            console.print(f"[yellow]Live state lookup failed: {exc}[/]")
+            state = None
+
         if state is None:
-            console.print("[yellow]No matching live game yet; waiting…[/]")
+            console.print("[yellow]No matching live game yet; waiting...[/]")
             time.sleep(cfg.loop.poll_seconds)
             continue
 

@@ -35,6 +35,13 @@ class BacktestReport:
     calibration: list[CalibrationBin]
 
 
+def _row_float(row: pd.Series, name: str, default: float = 0.0) -> float:
+    value = row.get(name, default)
+    if pd.isna(value):
+        return default
+    return float(value)
+
+
 def split_by_game(
     df: pd.DataFrame,
     finals_game_ids: list[str] = (),
@@ -74,8 +81,8 @@ def evaluate(model, rows: pd.DataFrame, label: str) -> BacktestReport:
     labels = rows["home_win"].to_numpy(dtype=float)
     probs = np.empty(len(rows), dtype=float)
     for i, (_, r) in enumerate(rows.iterrows()):
-        # Team identity is irrelevant: model.predict consumes only score_diff,
-        # seconds_remaining, period, pre_game_home_prob (see model/features.py).
+        # Team names are irrelevant; optional rolling team-strength columns are
+        # consumed when the cache has been enriched with NocturneBear totals.
         state = GameState(
             home_team="HOME",
             away_team="AWAY",
@@ -84,6 +91,8 @@ def evaluate(model, rows: pd.DataFrame, label: str) -> BacktestReport:
             period=int(r["period"]),
             seconds_remaining=float(r["seconds_remaining"]),
             pre_game_home_prob=float(r["pre_game_home_prob"]),
+            home_recent_net_rating=_row_float(r, "home_recent_net_rating"),
+            away_recent_net_rating=_row_float(r, "away_recent_net_rating"),
         )
         probs[i] = model.predict(state)
     return BacktestReport(
