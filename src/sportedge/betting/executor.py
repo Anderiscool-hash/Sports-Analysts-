@@ -100,8 +100,43 @@ class LiveExecutor(PaperExecutor):
         return super().place(order, token_id)
 
 
+class KalshiLiveExecutor(PaperExecutor):
+    """Sends real signed orders to the Kalshi exchange. Inherits paper bookkeeping.
+
+    Built only when venue == "kalshi" AND every safety switch is on AND Kalshi keys
+    are present. A stake in USDC becomes whole YES contracts inside the client.
+    """
+
+    mode = "live"
+
+    def __init__(self, secrets: Secrets) -> None:
+        super().__init__()
+        if not secrets.kalshi_complete:
+            raise ValueError("KalshiLiveExecutor requires complete Kalshi secrets")
+        self.secrets = secrets
+        self._client = None
+
+    def _kalshi(self):
+        if self._client is None:
+            from sportedge.market.kalshi import KalshiClient
+
+            self._client = KalshiClient(self.secrets.kalshi_host, self.secrets)
+        return self._client
+
+    def place(self, order: Order, token_id: str = "") -> Fill:
+        self._kalshi().place_order(token_id, order.size, order.price)
+        return super().place(order, token_id)
+
+
 def make_executor(config: Config, secrets: Secrets) -> PaperExecutor:
-    """Returns a LiveExecutor only when every safety switch is on; else paper."""
-    if config.live_enabled and secrets.complete:
+    """Returns a live executor only when every safety switch for the selected venue is
+    on; otherwise paper. Venue is chosen by ``config.venue``."""
+    if not config.live_enabled:
+        return PaperExecutor()
+    if config.venue == "kalshi":
+        if secrets.kalshi_complete:
+            return KalshiLiveExecutor(secrets)
+        return PaperExecutor()
+    if secrets.complete:
         return LiveExecutor(secrets)
     return PaperExecutor()

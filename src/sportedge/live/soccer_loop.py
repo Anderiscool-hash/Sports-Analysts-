@@ -21,6 +21,7 @@ from sportedge.betting.strategy import Strategy
 from sportedge.config import load_config, load_secrets
 from sportedge.data.espn_soccer import get_live_state
 from sportedge.market.edge import BottomDetector, edge
+from sportedge.market.kalshi import KalshiClient
 from sportedge.market.polymarket import PolymarketClient
 from sportedge.model.soccer_winprob import SoccerWinProbModel
 from sportedge.types import SoccerGameState, WinProb3
@@ -65,6 +66,36 @@ def _live_state(cfg) -> SoccerGameState | None:
     return get_live_state(s.home_team, s.away_team, s.lambda_home, s.lambda_away, s.league)
 
 
+def _market_client(cfg, secrets):
+    """Pick the market venue. Both clients expose ``get_price(token, side) -> [0,1]``."""
+    if cfg.venue == "kalshi":
+        return KalshiClient(secrets.kalshi_host, secrets)
+    return PolymarketClient(cfg.soccer.gamma_host, secrets.clob_host, secrets.chain_id, secrets)
+
+
+def _resolve_tokens(cfg, client) -> dict[str, str]:
+    """Map each 1X2 outcome to a venue token id. Kalshi uses configured contract
+    tickers; Polymarket discovers the market and matches outcome labels."""
+    s = cfg.soccer
+    if cfg.venue == "kalshi":
+        tickers = {
+            "home": s.kalshi_home_ticker,
+            "draw": s.kalshi_draw_ticker,
+            "away": s.kalshi_away_ticker,
+        }
+        return {key: t for key, t in tickers.items() if t}
+    market = client.find_market(s.market_slug, query=f"{s.home_team} {s.away_team}")
+    if market and market.token_ids:
+        return map_outcome_tokens(
+            market.outcomes,
+            market.token_ids,
+            s.home_outcome or s.home_team,
+            s.draw_outcome,
+            s.away_outcome or s.away_team,
+        )
+    return {}
+
+
 def run(mode: str | None = None, config_path: str = "config/config.yaml") -> None:
     cfg = load_config(config_path)
     if mode:
@@ -72,7 +103,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
     secrets = load_secrets()
 
     model = SoccerWinProbModel.load(cfg.model.path)
-    pm = PolymarketClient(cfg.soccer.gamma_host, secrets.clob_host, secrets.chain_id, secrets)
+    client = _market_client(cfg, secrets)
     strategy = Strategy(cfg.edge.min_edge, cfg.kelly_fraction, cfg.max_stake, cfg.bankroll)
     detectors = {
         key: BottomDetector(cfg.edge.dip_threshold, cfg.edge.min_edge, cfg.edge.rebound_ticks)
@@ -82,7 +113,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
 
     console.rule(
         f"[bold]SportEdge WC loop[/] - {cfg.soccer.home_team} vs {cfg.soccer.away_team} "
-        f"- mode=[bold]{executor.mode}[/] "
+        f"- venue=[bold]{cfg.venue}[/] mode=[bold]{executor.mode}[/] "
         f"model={'trained' if model.is_trained else 'poisson-fallback'}"
     )
     if executor.mode == "live":
@@ -91,22 +122,13 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
     # Resolve the three outcome tokens once.
     tokens: dict[str, str] = {}
     try:
-        market = pm.find_market(
-            cfg.soccer.market_slug,
-            query=f"{cfg.soccer.home_team} {cfg.soccer.away_team}",
-        )
-        if market and market.token_ids:
-            tokens = map_outcome_tokens(
-                market.outcomes,
-                market.token_ids,
-                cfg.soccer.home_outcome or cfg.soccer.home_team,
-                cfg.soccer.draw_outcome,
-                cfg.soccer.away_outcome or cfg.soccer.away_team,
-            )
+        tokens = _resolve_tokens(cfg, client)
+        if tokens:
             console.print(
-                f"Market: [cyan]{market.question or market.slug}[/]  "
-                f"tokens={ {k: v[:6] + '...' for k, v in tokens.items()} }"
+                f"Venue [cyan]{cfg.venue}[/]  tokens={ {k: v[:8] for k, v in tokens.items()} }"
             )
+        else:
+            console.print("[yellow]No outcome tokens resolved; running model-only.[/]")
     except Exception as exc:  # noqa: BLE001 - degrade to model-only display
         console.print(f"[yellow]Market lookup failed ({exc}); running model-only.[/]")
 
@@ -131,7 +153,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
             if not token_id:
                 continue
             try:
-                price = pm.get_price(token_id, "BUY")
+                price = client.get_price(token_id, "BUY")
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[yellow]{key} price fetch failed: {exc}[/]")
                 continue
