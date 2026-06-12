@@ -28,6 +28,8 @@ class GameState:
     seconds_remaining: float  # seconds left in regulation (see helper above)
     pre_game_home_prob: float = 0.5
     home_has_possession: bool | None = None
+    home_recent_net_rating: float = 0.0
+    away_recent_net_rating: float = 0.0
 
     @property
     def score_diff(self) -> int:
@@ -35,5 +37,59 @@ class GameState:
         return self.home_score - self.away_score
 
     @property
+    def recent_net_rating_diff(self) -> float:
+        """Home team recent net rating minus away team recent net rating."""
+        return self.home_recent_net_rating - self.away_recent_net_rating
+
+    @property
     def is_final(self) -> bool:
         return self.seconds_remaining <= 0 and self.period >= 4
+
+
+REGULATION_MINUTES = 90
+
+
+@dataclass(frozen=True)
+class WinProb3:
+    """A 1X2 match-result distribution from the home team's perspective.
+
+    The three values are probabilities of the 90-minute regulation result and
+    always sum to 1: home win, draw, away win."""
+
+    home: float
+    draw: float
+    away: float
+
+
+@dataclass(frozen=True)
+class SoccerGameState:
+    """A single in-game soccer snapshot, from the home team's perspective.
+
+    ``lambda_home`` / ``lambda_away`` are full-match expected goals (xG) priors for
+    this matchup — supplied by pre-match calibration. The in-game model scales them
+    by the fraction of the match remaining. Red cards adjust the effective rates."""
+
+    home_team: str
+    away_team: str
+    home_goals: int
+    away_goals: int
+    minute: float  # minutes elapsed (0..90, may exceed 90 in stoppage time)
+    home_red_cards: int = 0
+    away_red_cards: int = 0
+    lambda_home: float = 1.45  # full-match expected goals, home
+    lambda_away: float = 1.15  # full-match expected goals, away
+
+    @property
+    def goal_diff(self) -> int:
+        """Home minus away. Positive = home leading."""
+        return self.home_goals - self.away_goals
+
+    @property
+    def minutes_remaining(self) -> float:
+        """Regulation minutes left; clamped to [0, 90]. Stoppage (minute > 90)
+        reads as 0 remaining — the scoreline dominates the result there anyway."""
+        return max(0.0, REGULATION_MINUTES - float(self.minute))
+
+    @property
+    def is_final(self) -> bool:
+        return self.minute >= REGULATION_MINUTES

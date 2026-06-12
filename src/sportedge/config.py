@@ -21,7 +21,7 @@ class LoopConfig(BaseModel):
 
 
 class ModelConfig(BaseModel):
-    path: str = "models/live_winprob.joblib"
+    path: str = "models/winprob.joblib"
 
 
 class MarketConfig(BaseModel):
@@ -29,6 +29,24 @@ class MarketConfig(BaseModel):
     market_slug: str = ""
     home_team: str = ""
     away_team: str = ""
+
+
+class SoccerMarketConfig(BaseModel):
+    """A World Cup 1X2 match market: three outcome tokens plus the pre-match
+    expected-goals priors that seed the Poisson model."""
+
+    gamma_host: str = "https://gamma-api.polymarket.com"
+    market_slug: str = ""
+    league: str = "fifa.world"  # ESPN soccer league slug
+    home_team: str = ""
+    away_team: str = ""
+    # Outcome labels as they appear on the Polymarket market (used to map tokens).
+    home_outcome: str = ""  # e.g. "Brazil"
+    draw_outcome: str = "Draw"
+    away_outcome: str = ""  # e.g. "Croatia"
+    # Pre-match full-match expected goals (calibration output; sensible WC defaults).
+    lambda_home: float = 1.45
+    lambda_away: float = 1.15
 
 
 class Config(BaseModel):
@@ -42,6 +60,7 @@ class Config(BaseModel):
     loop: LoopConfig = LoopConfig()
     model: ModelConfig = ModelConfig()
     market: MarketConfig = MarketConfig()
+    soccer: SoccerMarketConfig = SoccerMarketConfig()
 
     @property
     def live_enabled(self) -> bool:
