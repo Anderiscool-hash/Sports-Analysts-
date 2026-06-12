@@ -12,7 +12,9 @@ env/
 
 # Env / secrets
 .env
+.env.example
 *.key
+*.pem
 config/config.yaml
 config/secrets.yaml
 
