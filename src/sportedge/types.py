@@ -93,3 +93,76 @@ class SoccerGameState:
     @property
     def is_final(self) -> bool:
         return self.minute >= REGULATION_MINUTES
+
+
+# --------------------------------------------------------------------------- #
+# Live dashboard types: a richer, sport-agnostic view of a game in progress.
+# These carry display detail (fouls, cards, possession, last play) that the
+# trading models don't need, so they're kept separate from GameState.
+# --------------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class GameCandidate:
+    """A pickable live/upcoming game for the dashboard's selection menu."""
+
+    sport: str  # "basketball" | "soccer"
+    league: str  # ESPN league slug, e.g. "nba" or "fifa.world"
+    event_id: str
+    home_team: str
+    away_team: str
+    status: str  # "pre" | "in" | "post"
+    short_detail: str = ""  # e.g. "Q3 4:21" or "67'"
+
+
+@dataclass
+class LiveDetail:
+    """A rich live snapshot of one game, from the home team's perspective.
+
+    Sport-agnostic: basketball-only fields stay 0/False for soccer and vice
+    versa. ``last_play_text`` is shown verbatim and is the source of truth; the
+    ``free_throw_active`` / ``set_piece`` flags are best-effort derivations from
+    it (see ``detect_free_throw`` / ``detect_set_piece``)."""
+
+    sport: str
+    league: str
+    home_team: str
+    away_team: str
+    home_score: int = 0
+    away_score: int = 0
+    status: str = "pre"  # "pre" | "in" | "post"
+    clock: str = ""  # raw display clock, e.g. "4:21" or "67'"
+    period: int = 0  # basketball quarter (1-4, 5+ OT); 0 for soccer
+    minute: float = 0.0  # soccer match minute; 0.0 for basketball
+    possession: str = ""  # "home" | "away" | "" if unknown
+    last_play_text: str = ""
+    # basketball
+    home_fouls: int = 0
+    away_fouls: int = 0
+    free_throw_active: bool = False
+    # soccer
+    home_yellow: int = 0
+    away_yellow: int = 0
+    home_red: int = 0
+    away_red: int = 0
+    set_piece: str = ""  # "" | "free kick" | "penalty" | "corner"
+
+
+def detect_free_throw(last_play_text: str) -> bool:
+    """True if the most recent play describes a free throw (best-effort)."""
+    return "free throw" in (last_play_text or "").lower()
+
+
+def detect_set_piece(last_play_text: str) -> str:
+    """Classify a soccer set-piece from the most recent play text (best-effort).
+
+    Returns "penalty", "free kick", "corner", or "" if none is recognized.
+    Penalty is checked first since "penalty" text can also mention a kick."""
+    text = (last_play_text or "").lower()
+    if "penalty" in text:
+        return "penalty"
+    if "free kick" in text or "free-kick" in text:
+        return "free kick"
+    if "corner" in text:
+        return "corner"
+    return ""
