@@ -3,7 +3,7 @@
 ## Objective
 
 For NBA Finals Games 3–7: scrape data, model **live in-game win probability**,
-compare to live Polymarket prices, and enter positions when the market price dips
+compare to live Kalshi prices, and enter positions when the market price dips
 below model fair value ("snipe the bottom") to capture value at the best odds.
 Real-money execution is opt-in; everything runs in paper mode by default.
 
@@ -47,11 +47,11 @@ little to train on alone).
   the pipeline runs before a model is trained.
 
 ### 3. Market (`market/`)
-- `polymarket.py`
-  - **Gamma API** (`https://gamma-api.polymarket.com`) — discover the market /
-    token ids for a given game (read-only, no auth).
-  - **CLOB** (`py-clob-client`) — live order book (best bid/ask, mid) read-only;
-    order placement only constructed when live mode is enabled.
+- `kalshi.py`
+  - **Read** (`/markets/{ticker}`) — live prices (yes_bid/ask → [0,1] probability)
+    and market lookup, no auth.
+  - **Orders** (RSA-PSS signed `/portfolio/orders`) — only constructed when live
+    mode is enabled and Kalshi keys are present.
 - `edge.py` — **pure logic, TDD'd**:
   - `implied_prob_from_price`, `edge = model_p - price`
   - `BottomDetector` — tracks a rolling price series, flags a local "bottom":
@@ -63,8 +63,8 @@ little to train on alone).
   capped by `max_stake` and `bankroll`. Refuses to size when edge < `min_edge`.
 - `executor.py`
   - `PaperExecutor` — logs intended fills at the observed price; tracks P&L.
-  - `LiveExecutor` — places real CLOB orders. Constructed **only** if
-    `mode == "live"` AND `confirm_live: true` in config AND keys present.
+  - `KalshiLiveExecutor` — places real signed Kalshi orders. Constructed **only**
+    if `mode == "live"` AND `confirm_live: true` in config AND Kalshi keys present.
 
 ### 5. Live loop (`live/loop.py`)
 Poll game state → live P(win) → fetch market price → edge + bottom check →
@@ -85,7 +85,7 @@ strategy size → executor. Rich console table each tick. `--mode paper|live`.
 | Config + paper executor + loop wiring | **real** |
 | nba_api historical/live calls | **real calls**, need network + light validation |
 | xgboost trained model | **stub until** `fetch_historical` + `train` are run |
-| Polymarket Gamma/CLOB | **real client**, read paths first; live orders gated |
+| Kalshi read/orders | **real client**, read paths first; live orders gated |
 
 ## Build order
 1. ✅ scaffold + config

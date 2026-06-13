@@ -1,8 +1,8 @@
 """Live World Cup orchestration loop (3-way 1X2).
 
-Per tick: soccer game state -> model P(home)/P(draw)/P(away) -> three Polymarket
+Per tick: soccer game state -> model P(home)/P(draw)/P(away) -> three Kalshi
 prices -> per-outcome edge + bottom check -> Kelly sizing -> executor. Each of the
-three outcome tokens gets its own ``BottomDetector`` so a dip on any one can be
+three outcome contracts gets its own ``BottomDetector`` so a dip on any one can be
 sniped independently. Paper mode by default.
 
     python -m sportedge.live.soccer_loop --mode paper
@@ -22,7 +22,6 @@ from sportedge.config import load_config, load_secrets
 from sportedge.data.espn_soccer import get_live_state
 from sportedge.market.edge import BottomDetector, edge
 from sportedge.market.kalshi import KalshiClient
-from sportedge.market.polymarket import PolymarketClient
 from sportedge.model.soccer_winprob import SoccerWinProbModel
 from sportedge.types import SoccerGameState, WinProb3
 
@@ -30,31 +29,6 @@ console = Console()
 
 # Logical outcome keys in display order.
 OUTCOMES = ("home", "draw", "away")
-
-
-def map_outcome_tokens(
-    outcomes: list[str],
-    token_ids: list[str],
-    home_label: str,
-    draw_label: str,
-    away_label: str,
-) -> dict[str, str]:
-    """Match each 1X2 outcome to its CLOB token id by label substring.
-
-    Returns a dict with any subset of {"home","draw","away"} that could be resolved.
-    """
-    wanted = {"home": home_label, "draw": draw_label, "away": away_label}
-    result: dict[str, str] = {}
-    for key, label in wanted.items():
-        if not label:
-            continue
-        label_l = label.lower()
-        for i, outcome in enumerate(outcomes):
-            text = str(outcome).lower()
-            if i < len(token_ids) and (label_l in text or text in label_l):
-                result[key] = token_ids[i]
-                break
-    return result
 
 
 def _model_p(probs: WinProb3, key: str) -> float:
@@ -66,34 +40,20 @@ def _live_state(cfg) -> SoccerGameState | None:
     return get_live_state(s.home_team, s.away_team, s.lambda_home, s.lambda_away, s.league)
 
 
-def _market_client(cfg, secrets):
-    """Pick the market venue. Both clients expose ``get_price(token, side) -> [0,1]``."""
-    if cfg.venue == "kalshi":
-        return KalshiClient(secrets.kalshi_host, secrets)
-    return PolymarketClient(cfg.soccer.gamma_host, secrets.clob_host, secrets.chain_id, secrets)
+def _market_client(cfg, secrets) -> KalshiClient:
+    """Kalshi market client. Exposes ``get_price(ticker, side) -> [0, 1]``."""
+    return KalshiClient(secrets.kalshi_host, secrets)
 
 
 def _resolve_tokens(cfg, client) -> dict[str, str]:
-    """Map each 1X2 outcome to a venue token id. Kalshi uses configured contract
-    tickers; Polymarket discovers the market and matches outcome labels."""
+    """Map each 1X2 outcome to its configured Kalshi contract ticker."""
     s = cfg.soccer
-    if cfg.venue == "kalshi":
-        tickers = {
-            "home": s.kalshi_home_ticker,
-            "draw": s.kalshi_draw_ticker,
-            "away": s.kalshi_away_ticker,
-        }
-        return {key: t for key, t in tickers.items() if t}
-    market = client.find_market(s.market_slug, query=f"{s.home_team} {s.away_team}")
-    if market and market.token_ids:
-        return map_outcome_tokens(
-            market.outcomes,
-            market.token_ids,
-            s.home_outcome or s.home_team,
-            s.draw_outcome,
-            s.away_outcome or s.away_team,
-        )
-    return {}
+    tickers = {
+        "home": s.kalshi_home_ticker,
+        "draw": s.kalshi_draw_ticker,
+        "away": s.kalshi_away_ticker,
+    }
+    return {key: t for key, t in tickers.items() if t}
 
 
 def run(mode: str | None = None, config_path: str = "config/config.yaml") -> None:
@@ -113,7 +73,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
 
     console.rule(
         f"[bold]SportEdge WC loop[/] - {cfg.soccer.home_team} vs {cfg.soccer.away_team} "
-        f"- venue=[bold]{cfg.venue}[/] mode=[bold]{executor.mode}[/] "
+        f"- venue=[bold]kalshi[/] mode=[bold]{executor.mode}[/] "
         f"model={'trained' if model.is_trained else 'poisson-fallback'}"
     )
     if executor.mode == "live":
@@ -125,7 +85,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
         tokens = _resolve_tokens(cfg, client)
         if tokens:
             console.print(
-                f"Venue [cyan]{cfg.venue}[/]  tokens={ {k: v[:8] for k, v in tokens.items()} }"
+                f"Venue [cyan]kalshi[/]  tickers={ {k: v[:8] for k, v in tokens.items()} }"
             )
         else:
             console.print("[yellow]No outcome tokens resolved; running model-only.[/]")

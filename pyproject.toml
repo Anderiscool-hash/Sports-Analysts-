@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "sportedge"
 version = "0.1.0"
-description = "NBA Finals live win-probability model + Polymarket edge engine"
+description = "Live win-probability models (NBA + World Cup) + Kalshi edge engine"
 requires-python = ">=3.11"
 readme = "README.md"
 

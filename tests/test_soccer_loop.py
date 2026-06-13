@@ -9,33 +9,29 @@ from __future__ import annotations
 
 from sportedge.betting.executor import PaperExecutor
 from sportedge.betting.strategy import Strategy
-from sportedge.live.soccer_loop import map_outcome_tokens
+from sportedge.config import Config
+from sportedge.live.soccer_loop import _resolve_tokens
 from sportedge.market.edge import BottomDetector
 from sportedge.model.soccer_winprob import SoccerWinProbModel
 from sportedge.types import SoccerGameState
 
 
-def test_map_outcome_tokens_resolves_all_three():
-    tokens = map_outcome_tokens(
-        outcomes=["Brazil", "Draw", "Croatia"],
-        token_ids=["tok_home", "tok_draw", "tok_away"],
-        home_label="Brazil",
-        draw_label="Draw",
-        away_label="Croatia",
-    )
-    assert tokens == {"home": "tok_home", "draw": "tok_draw", "away": "tok_away"}
+def test_resolve_tokens_uses_configured_kalshi_tickers():
+    cfg = Config()
+    cfg.soccer.kalshi_home_ticker = "WC-BRA-WIN"
+    cfg.soccer.kalshi_draw_ticker = "WC-BRA-DRAW"
+    cfg.soccer.kalshi_away_ticker = "WC-CRO-WIN"
+    tokens = _resolve_tokens(cfg, client=None)
+    assert tokens == {"home": "WC-BRA-WIN", "draw": "WC-BRA-DRAW", "away": "WC-CRO-WIN"}
 
 
-def test_map_outcome_tokens_partial_when_label_missing():
-    tokens = map_outcome_tokens(
-        outcomes=["Brazil", "Draw", "Croatia"],
-        token_ids=["tok_home", "tok_draw", "tok_away"],
-        home_label="Brazil",
-        draw_label="",
-        away_label="Croatia",
-    )
+def test_resolve_tokens_omits_unset_outcomes():
+    cfg = Config()
+    cfg.soccer.kalshi_home_ticker = "WC-BRA-WIN"
+    cfg.soccer.kalshi_away_ticker = "WC-CRO-WIN"
+    tokens = _resolve_tokens(cfg, client=None)
     assert "draw" not in tokens
-    assert tokens["home"] == "tok_home" and tokens["away"] == "tok_away"
+    assert tokens == {"home": "WC-BRA-WIN", "away": "WC-CRO-WIN"}
 
 
 def test_end_to_end_snipe_places_paper_fill():

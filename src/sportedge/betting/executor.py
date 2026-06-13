@@ -1,10 +1,10 @@
-"""Order execution. PaperExecutor logs intended fills; LiveExecutor sends real
-CLOB orders and is only built when live mode is fully enabled.
+"""Order execution. PaperExecutor logs intended fills; KalshiLiveExecutor sends
+real signed orders to Kalshi and is only built when live mode is fully enabled.
 
 Three independent switches are required before any real order can be sent:
   1. config.mode == "live"
   2. config.confirm_live is True   (both checked by config.live_enabled)
-  3. complete Polymarket secrets present
+  3. complete Kalshi secrets present
 """
 
 from __future__ import annotations
@@ -55,56 +55,11 @@ class PaperExecutor:
         return fill
 
 
-class LiveExecutor(PaperExecutor):
-    """Sends real orders to the Polymarket CLOB. Inherits paper bookkeeping."""
-
-    mode = "live"
-
-    def __init__(self, secrets: Secrets) -> None:
-        super().__init__()
-        if not secrets.complete:
-            raise ValueError("LiveExecutor requires complete Polymarket secrets")
-        self.secrets = secrets
-        self._client = None
-
-    def _clob(self):
-        if self._client is None:
-            from py_clob_client.client import ClobClient
-            from py_clob_client.clob_types import ApiCreds
-
-            creds = None
-            if self.secrets.api_key:
-                creds = ApiCreds(
-                    self.secrets.api_key,
-                    self.secrets.api_secret,
-                    self.secrets.api_passphrase,
-                )
-            self._client = ClobClient(
-                self.secrets.clob_host,
-                key=self.secrets.private_key,
-                chain_id=self.secrets.chain_id,
-                creds=creds,
-                funder=self.secrets.funder_address,
-            )
-        return self._client
-
-    def place(self, order: Order, token_id: str = "") -> Fill:
-        from py_clob_client.clob_types import OrderArgs
-        from py_clob_client.order_builder.constants import BUY
-
-        # size here is USDC stake → shares = stake / price
-        shares = round(order.size / order.price, 2)
-        args = OrderArgs(price=order.price, size=shares, side=BUY, token_id=token_id)
-        signed = self._clob().create_order(args)
-        self._clob().post_order(signed)
-        return super().place(order, token_id)
-
-
 class KalshiLiveExecutor(PaperExecutor):
     """Sends real signed orders to the Kalshi exchange. Inherits paper bookkeeping.
 
-    Built only when venue == "kalshi" AND every safety switch is on AND Kalshi keys
-    are present. A stake in USDC becomes whole YES contracts inside the client.
+    Built only when every safety switch is on AND Kalshi keys are present.
+    A stake in USDC becomes whole YES contracts inside the client.
     """
 
     mode = "live"
@@ -129,14 +84,8 @@ class KalshiLiveExecutor(PaperExecutor):
 
 
 def make_executor(config: Config, secrets: Secrets) -> PaperExecutor:
-    """Returns a live executor only when every safety switch for the selected venue is
-    on; otherwise paper. Venue is chosen by ``config.venue``."""
-    if not config.live_enabled:
-        return PaperExecutor()
-    if config.venue == "kalshi":
-        if secrets.kalshi_complete:
-            return KalshiLiveExecutor(secrets)
-        return PaperExecutor()
-    if secrets.complete:
-        return LiveExecutor(secrets)
+    """Returns a Kalshi live executor only when every safety switch is on AND Kalshi
+    keys are present; otherwise paper."""
+    if config.live_enabled and secrets.kalshi_complete:
+        return KalshiLiveExecutor(secrets)
     return PaperExecutor()

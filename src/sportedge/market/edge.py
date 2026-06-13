@@ -1,6 +1,6 @@
 """Edge math and the "snipe the bottom" detector.
 
-Pure, dependency-free, fully unit-tested. A Polymarket YES price in [0, 1] is read
+Pure, dependency-free, fully unit-tested. A Kalshi YES price in [0, 1] is read
 directly as the market-implied probability, so:
 
     edge = model_p - price
@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 
 def implied_prob_from_price(price: float) -> float:
-    """Polymarket share price already equals implied probability (0..1)."""
+    """Kalshi YES price already equals implied probability (0..1)."""
     return price
 
 

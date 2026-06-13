@@ -20,10 +20,10 @@ loop:
 model:
   path: models/live_winprob.joblib   # falls back to logistic model if missing
 
-# Polymarket market selection for the current game (filled per game).
+# Kalshi market selection for the current NBA game (filled per game).
 market:
-  gamma_host: https://gamma-api.polymarket.com
-  # Either set a known market slug/id, or let the loop search by team names.
   market_slug: ""
   home_team: ""
   away_team: ""
+  # Kalshi contract ticker for "home team wins".
+  kalshi_ticker: ""

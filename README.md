@@ -1,16 +1,15 @@
-# SportEdge — NBA Finals live model + Polymarket edge engine
+# SportEdge — live win-prob models (NBA + World Cup) + Kalshi edge engine
 
-Analyze scraped NBA Finals data (Games 3–7), build a model that predicts game
-outcomes **and live in-game win probability**, then compare that model against
-live Polymarket prices to find value and "snipe the bottom" — entering when the
-market temporarily over-reacts and odds are cheapest relative to the model.
+Analyze scraped sports data, build models that predict game outcomes **and live
+in-game win probability**, then compare those models against live Kalshi prices
+to find value and "snipe the bottom" — entering when the market temporarily
+over-reacts and odds are cheapest relative to the model.
 
 > ⚠️ **Money & legal disclaimer.** This software can place real trades on
-> Polymarket. Real-money execution is **disabled by default** and gated behind an
-> explicit config flag. Prediction-market trading carries real financial risk and
-> Polymarket restricts access for US persons under its CFTC settlement. You are
-> responsible for complying with the laws of your jurisdiction. Nothing here is
-> financial advice. Start in `paper` mode.
+> Kalshi. Real-money execution is **disabled by default** and gated behind
+> explicit config flags. Prediction-market trading carries real financial risk.
+> You are responsible for complying with the laws of your jurisdiction. Nothing
+> here is financial advice. Start in `paper` mode.
 
 ## What "snipe the bottom" means here
 
@@ -28,7 +27,7 @@ scrape NBA data ──► features ──► train pre-game + live win-prob mode
                                           │
 live game state ──► live model ──► P(win)─┤
                                           ▼
-Polymarket (Gamma + CLOB) ──► market price ──► edge = P(win) − price
+Kalshi (read prices) ──► market price ──► edge = P(win) − price
                                           ▼
                           bottom detector / strategy
                                           ▼
@@ -41,7 +40,7 @@ Polymarket (Gamma + CLOB) ──► market price ──► edge = P(win) − pri
 |------|---------|
 | `src/sportedge/data/` | NBA scraping (historical + live) and local cache |
 | `src/sportedge/model/` | feature engineering + pre-game & live win-prob models |
-| `src/sportedge/market/` | Polymarket client + edge / bottom detection |
+| `src/sportedge/market/` | Kalshi client + edge / bottom detection |
 | `src/sportedge/betting/` | strategy sizing + paper/live executor |
 | `src/sportedge/live/` | orchestration loop |
 | `scripts/` | one-off jobs (fetch history, train) |

@@ -2,8 +2,8 @@
 
 Kalshi is a US-regulated exchange. Its 1X2 World Cup market is three yes/no contracts
 (home / draw / away), each identified by a *ticker*. Prices are quoted in cents (1..99),
-which this client converts to a [0, 1] probability so it is a drop-in for the same
-``edge`` / ``BottomDetector`` / ``Strategy`` spine the Polymarket client feeds.
+which this client converts to a [0, 1] probability so it feeds the same
+``edge`` / ``BottomDetector`` / ``Strategy`` spine the loops are built on.
 
 Read paths (market lookup, price) need no auth. Order placement uses Kalshi's RSA-PSS
 request signing and is only ever invoked from a fully-gated live executor.
@@ -26,8 +26,8 @@ DEFAULT_HOST = "https://api.elections.kalshi.com/trade-api/v2"
 
 @dataclass
 class KalshiMarketRef:
-    """Duck-compatible with Polymarket's ``MarketRef`` for the loop's use:
-    ``token_ids`` are Kalshi tickers, ``outcomes`` their labels."""
+    """Market reference for the loop's use: ``token_ids`` are Kalshi tickers,
+    ``outcomes`` their labels."""
 
     slug: str
     question: str

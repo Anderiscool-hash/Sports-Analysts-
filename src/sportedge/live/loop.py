@@ -18,19 +18,10 @@ from sportedge.config import load_config, load_secrets
 from sportedge.data.isports import get_live_state as get_isports_live_state
 from sportedge.data.nba_scraper import get_live_state
 from sportedge.market.edge import BottomDetector, edge
-from sportedge.market.polymarket import PolymarketClient
+from sportedge.market.kalshi import KalshiClient
 from sportedge.model.live_winprob import WinProbModel
 
 console = Console()
-
-
-def _home_token_index(outcomes: list[str], home_team: str) -> int:
-    """Pick the CLOB token whose outcome refers to the home team; default 0."""
-    home = home_team.lower()
-    for i, outcome in enumerate(outcomes):
-        if home and home in str(outcome).lower():
-            return i
-    return 0
 
 
 def _live_state(home_team: str, away_team: str):
@@ -47,31 +38,24 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
     secrets = load_secrets()
 
     model = WinProbModel.load(cfg.model.path)
-    pm = PolymarketClient(cfg.market.gamma_host, secrets.clob_host, secrets.chain_id, secrets)
+    client = KalshiClient(secrets.kalshi_host, secrets)
     strategy = Strategy(cfg.edge.min_edge, cfg.kelly_fraction, cfg.max_stake, cfg.bankroll)
     detector = BottomDetector(cfg.edge.dip_threshold, cfg.edge.min_edge, cfg.edge.rebound_ticks)
     executor = make_executor(cfg, secrets)
 
     console.rule(
-        f"[bold]SportEdge live loop[/] - mode=[bold]{executor.mode}[/] "
+        f"[bold]SportEdge live loop[/] - venue=[bold]kalshi[/] mode=[bold]{executor.mode}[/] "
         f"model={'trained' if model.is_trained else 'logistic-fallback'}"
     )
     if executor.mode == "live":
         console.print("[red bold]LIVE MODE: real orders will be placed.[/]")
 
-    # Resolve the Polymarket market + the home-team token once.
-    token_id: str | None = None
-    try:
-        market = pm.find_market(
-            cfg.market.market_slug,
-            query=f"{cfg.market.home_team} {cfg.market.away_team}",
-        )
-        if market and market.token_ids:
-            idx = _home_token_index(market.outcomes, cfg.market.home_team)
-            token_id = market.token_ids[min(idx, len(market.token_ids) - 1)]
-            console.print(f"Market: [cyan]{market.question or market.slug}[/]  token={token_id}")
-    except Exception as exc:  # noqa: BLE001 - degrade to model-only display
-        console.print(f"[yellow]Market lookup failed ({exc}); running model-only.[/]")
+    # The home-team "win" contract is a single configured Kalshi ticker.
+    token_id: str | None = cfg.market.kalshi_ticker or None
+    if token_id:
+        console.print(f"Market: [cyan]{token_id}[/] (Kalshi home-win contract)")
+    else:
+        console.print("[yellow]No Kalshi ticker configured; running model-only.[/]")
 
     while True:
         try:
@@ -90,7 +74,7 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
         price = None
         if token_id:
             try:
-                price = pm.get_price(token_id, "BUY")
+                price = client.get_price(token_id, "BUY")
             except Exception as exc:  # noqa: BLE001
                 console.print(f"[yellow]price fetch failed: {exc}[/]")
 

@@ -14,9 +14,8 @@ scikit-learn>=1.4
 xgboost>=2.0
 joblib>=1.3
 
-# --- Polymarket ---
-py-clob-client>=0.17   # Polymarket CLOB order book + (gated) order placement
-web3>=6.0              # required by clob client for signing
+# --- Kalshi ---
+cryptography>=42.0     # RSA-PSS request signing for (gated) order placement
 python-dotenv>=1.0
 
 # --- Config / orchestration ---

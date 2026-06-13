@@ -122,17 +122,17 @@ def test_place_order_signs_and_posts(monkeypatch):
 
 
 def test_make_executor_kalshi_live_when_keys_present():
-    cfg = Config(mode="live", confirm_live=True, venue="kalshi")
+    cfg = Config(mode="live", confirm_live=True)
     secrets = _gen_secrets()
     assert isinstance(make_executor(cfg, secrets), KalshiLiveExecutor)
 
 
 def test_make_executor_kalshi_falls_back_to_paper_without_keys():
-    cfg = Config(mode="live", confirm_live=True, venue="kalshi")
+    cfg = Config(mode="live", confirm_live=True)
     ex = make_executor(cfg, Secrets())
     assert type(ex) is PaperExecutor
 
 
 def test_make_executor_paper_when_not_live():
-    cfg = Config(mode="paper", venue="kalshi")
+    cfg = Config(mode="paper")
     assert type(make_executor(cfg, _gen_secrets())) is PaperExecutor
