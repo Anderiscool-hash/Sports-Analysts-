@@ -16,7 +16,7 @@ import time
 from rich.console import Console
 from rich.table import Table
 
-from sportedge.betting.executor import make_executor
+from sportedge.betting.executor import make_executor, paper_gate_status
 from sportedge.betting.strategy import Strategy
 from sportedge.config import load_config, load_secrets
 from sportedge.data.espn_soccer import get_live_state
@@ -56,7 +56,28 @@ def _resolve_tokens(cfg, client) -> dict[str, str]:
     return {key: t for key, t in tickers.items() if t}
 
 
-def run(mode: str | None = None, config_path: str = "config/config.yaml") -> None:
+def paper_metadata(cfg, outcome: str) -> dict[str, str]:
+    """Metadata required for later ESPN settlement of soccer paper fills."""
+    selected = {
+        "home": cfg.soccer.home_team,
+        "draw": "draw",
+        "away": cfg.soccer.away_team,
+    }[outcome]
+    return {
+        "event_id": cfg.soccer.espn_event_id or cfg.soccer.market_slug,
+        "sport": "soccer",
+        "league": cfg.soccer.league,
+        "home_team": cfg.soccer.home_team,
+        "away_team": cfg.soccer.away_team,
+        "selected_team": selected,
+    }
+
+
+def run(
+    mode: str | None = None,
+    config_path: str = "config/config.yaml",
+    paper_ledger: str = "data/cache/paper_ledger.parquet",
+) -> None:
     cfg = load_config(config_path)
     if mode:
         cfg.mode = mode
@@ -64,12 +85,20 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
 
     model = SoccerWinProbModel.load(cfg.model.path)
     client = _market_client(cfg, secrets)
-    strategy = Strategy(cfg.edge.min_edge, cfg.kelly_fraction, cfg.max_stake, cfg.bankroll)
+    strategy = Strategy(
+        cfg.edge.min_edge,
+        cfg.kelly_fraction,
+        cfg.max_stake,
+        cfg.bankroll,
+        cfg.edge.min_price,
+        cfg.edge.max_price,
+    )
     detectors = {
         key: BottomDetector(cfg.edge.dip_threshold, cfg.edge.min_edge, cfg.edge.rebound_ticks)
         for key in OUTCOMES
     }
-    executor = make_executor(cfg, secrets)
+    executor = make_executor(cfg, secrets, paper_ledger_path=paper_ledger)
+    proof_ok, proof_reason = paper_gate_status(cfg, paper_ledger)
 
     console.rule(
         f"[bold]SportEdge WC loop[/] - {cfg.soccer.home_team} vs {cfg.soccer.away_team} "
@@ -78,6 +107,10 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
     )
     if executor.mode == "live":
         console.print("[red bold]LIVE MODE: real orders will be placed.[/]")
+    else:
+        console.print(f"Paper ledger: [cyan]{paper_ledger}[/]")
+        if cfg.live_enabled and secrets.kalshi_complete and not proof_ok:
+            console.print(f"[yellow]Live blocked by paper gate: {proof_reason}[/]")
 
     # Resolve the three outcome tokens once.
     tokens: dict[str, str] = {}
@@ -124,7 +157,11 @@ def run(mode: str | None = None, config_path: str = "config/config.yaml") -> Non
             sig = detectors[key].update(price, _model_p(probs, key))
             order = strategy.decide(sig)
             if order and executor.staked + order.size <= cfg.bankroll:
-                fill = executor.place(order, token_id)
+                fill = executor.place(
+                    order,
+                    token_id,
+                    metadata=paper_metadata(cfg, key),
+                )
                 placed.append(f"{key.upper()} {fill.size:.2f}@{fill.price:.3f}")
 
         _render(state, probs, prices, executor, placed)
@@ -175,8 +212,9 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="SportEdge World Cup live loop")
     ap.add_argument("--mode", choices=["paper", "live"], default=None)
     ap.add_argument("--config", default="config/config.yaml")
+    ap.add_argument("--paper-ledger", default="data/cache/paper_ledger.parquet")
     args = ap.parse_args()
-    run(mode=args.mode, config_path=args.config)
+    run(mode=args.mode, config_path=args.config, paper_ledger=args.paper_ledger)
 
 
 if __name__ == "__main__":

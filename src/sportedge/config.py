@@ -14,6 +14,8 @@ class EdgeConfig(BaseModel):
     min_edge: float = 0.04
     dip_threshold: float = 0.05
     rebound_ticks: int = 1
+    min_price: float = 0.05
+    max_price: float = 0.95
 
 
 class LoopConfig(BaseModel):
@@ -24,14 +26,30 @@ class ModelConfig(BaseModel):
     path: str = "models/winprob.joblib"
 
 
+class PaperGateConfig(BaseModel):
+    """Minimum paper-trading proof required before live execution can be enabled."""
+
+    enabled: bool = True
+    min_fills: int = 25
+    min_settled_fills: int | None = None
+    min_realized_pnl: float = 0.0
+    min_realized_roi: float = 0.0
+    min_total_pnl: float = 0.0
+
+
 class MarketConfig(BaseModel):
     """An NBA game market on Kalshi: a single YES contract for the home team to win."""
 
     market_slug: str = ""
+    # ESPN event id used later to settle paper fills from final scores.
+    espn_event_id: str = ""
     home_team: str = ""
     away_team: str = ""
     # Kalshi contract ticker for "home team wins" (read prices / place orders).
     kalshi_ticker: str = ""
+    # Optional Kalshi contract ticker for "away team wins"; useful when discovery
+    # finds only the other side of the NBA moneyline.
+    kalshi_away_ticker: str = ""
 
 
 class SoccerMarketConfig(BaseModel):
@@ -39,6 +57,8 @@ class SoccerMarketConfig(BaseModel):
     pre-match expected-goals priors that seed the Poisson model."""
 
     market_slug: str = ""
+    # ESPN event id used later to settle paper fills from final scores.
+    espn_event_id: str = ""
     league: str = "fifa.world"  # ESPN soccer league slug
     home_team: str = ""
     away_team: str = ""
@@ -61,6 +81,7 @@ class Config(BaseModel):
     edge: EdgeConfig = EdgeConfig()
     loop: LoopConfig = LoopConfig()
     model: ModelConfig = ModelConfig()
+    paper_gate: PaperGateConfig = PaperGateConfig()
     market: MarketConfig = MarketConfig()
     soccer: SoccerMarketConfig = SoccerMarketConfig()
 

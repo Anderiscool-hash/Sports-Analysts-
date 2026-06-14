@@ -15,7 +15,9 @@ import numpy as np
 import pandas as pd
 
 from sportedge.model.features import FEATURE_NAMES, features_to_vector, state_to_features
-from sportedge.types import GameState
+from sportedge.types import GameState, REGULATION_SECONDS
+
+OPENING_ZERO_SCORE_SECONDS = REGULATION_SECONDS - 3 * 60
 
 
 def _row_float(row, name: str, default: float = 0.0) -> float:
@@ -42,6 +44,26 @@ def rows_to_xy(df) -> tuple[np.ndarray, np.ndarray]:
         X.append(features_to_vector(state_to_features(st)))
         y.append(int(r.home_win))
     return np.asarray(X), np.asarray(y)
+
+
+def clean_training_rows(df: pd.DataFrame) -> pd.DataFrame:
+    """Remove corrupted in-game states before model training or replay alignment.
+
+    Some live sources can emit placeholder 0-0 rows deep into a game when a play
+    or scoring field is missing. A real 0-0 state is plausible only at the very
+    beginning, so later 0-0 rows are treated as bad data.
+    """
+    required = {"home_score", "away_score", "period", "seconds_remaining"}
+    if df.empty or not required.issubset(df.columns):
+        return df.copy()
+    rows = df.copy()
+    home_score = pd.to_numeric(rows["home_score"], errors="coerce")
+    away_score = pd.to_numeric(rows["away_score"], errors="coerce")
+    period = pd.to_numeric(rows["period"], errors="coerce")
+    seconds_remaining = pd.to_numeric(rows["seconds_remaining"], errors="coerce")
+    zero_score = home_score.eq(0) & away_score.eq(0)
+    late_zero_score = zero_score & ((period > 1) | (seconds_remaining < OPENING_ZERO_SCORE_SECONDS))
+    return rows.loc[~late_zero_score].reset_index(drop=True)
 
 
 def split_by_game(
@@ -118,7 +140,7 @@ def train(
 ) -> str:
     import joblib
 
-    df = pd.read_parquet(data_path)
+    df = clean_training_rows(pd.read_parquet(data_path))
     if df.empty:
         raise SystemExit(f"No training rows in {data_path}. Run fetch_historical first.")
     train_df, cal_df, holdout_df = split_by_game(

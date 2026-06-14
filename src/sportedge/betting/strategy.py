@@ -40,14 +40,26 @@ def kelly_stake(
 
 
 class Strategy:
-    def __init__(self, min_edge: float, kelly_fraction: float, max_stake: float, bankroll: float):
+    def __init__(
+        self,
+        min_edge: float,
+        kelly_fraction: float,
+        max_stake: float,
+        bankroll: float,
+        min_price: float = 0.05,
+        max_price: float = 0.95,
+    ):
         self.min_edge = min_edge
         self.kelly_fraction = kelly_fraction
         self.max_stake = max_stake
         self.bankroll = bankroll
+        self.min_price = min_price
+        self.max_price = max_price
 
     def decide(self, signal: BottomSignal) -> Order | None:
         if not signal.is_bottom or signal.edge < self.min_edge:
+            return None
+        if signal.price < self.min_price or signal.price > self.max_price:
             return None
         stake = kelly_stake(
             signal.model_p, signal.price, self.bankroll, self.kelly_fraction, self.max_stake

@@ -13,17 +13,45 @@ edge:
   min_edge: 0.04           # require model_p - price >= 4% before considering a bet
   dip_threshold: 0.05      # price must drop >= 5% to count as a "dip"
   rebound_ticks: 1         # ticks of upward move needed to confirm the bottom
+  min_price: 0.05          # avoid dust-price contracts that behave like lottery tickets
+  max_price: 0.95          # avoid near-certain contracts with poor upside
 
 loop:
   poll_seconds: 5          # how often to re-check game + market state
 
 model:
-  path: models/live_winprob.joblib   # falls back to logistic model if missing
+  path: models/winprob.joblib        # falls back to logistic model if missing
+
+# Extra live-trading safety gate. Even with live keys and confirm_live=true,
+# real orders stay disabled until the persistent paper ledger proves enough
+# paper-trading evidence.
+paper_gate:
+  enabled: true
+  min_fills: 25
+  min_settled_fills: 25      # defaults to min_fills when omitted
+  min_realized_pnl: 0.0      # settled P&L must be non-negative
+  min_realized_roi: 0.0      # realized P&L / settled stake must be non-negative
+  min_total_pnl: 0.0
 
 # Kalshi market selection for the current NBA game (filled per game).
 market:
   market_slug: ""
+  espn_event_id: ""         # ESPN event id for later paper settlement
   home_team: ""
   away_team: ""
   # Kalshi contract ticker for "home team wins".
   kalshi_ticker: ""
+  # Optional Kalshi contract ticker for "away team wins".
+  kalshi_away_ticker: ""
+
+soccer:
+  market_slug: ""
+  espn_event_id: ""         # ESPN event id for later paper settlement
+  league: fifa.world
+  home_team: ""
+  away_team: ""
+  lambda_home: 1.45
+  lambda_away: 1.15
+  kalshi_home_ticker: ""
+  kalshi_draw_ticker: ""
+  kalshi_away_ticker: ""

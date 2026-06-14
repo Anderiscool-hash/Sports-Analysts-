@@ -10,7 +10,7 @@ from __future__ import annotations
 from sportedge.betting.executor import PaperExecutor
 from sportedge.betting.strategy import Strategy
 from sportedge.config import Config
-from sportedge.live.soccer_loop import _resolve_tokens
+from sportedge.live.soccer_loop import _resolve_tokens, paper_metadata
 from sportedge.market.edge import BottomDetector
 from sportedge.model.soccer_winprob import SoccerWinProbModel
 from sportedge.types import SoccerGameState
@@ -32,6 +32,35 @@ def test_resolve_tokens_omits_unset_outcomes():
     tokens = _resolve_tokens(cfg, client=None)
     assert "draw" not in tokens
     assert tokens == {"home": "WC-BRA-WIN", "away": "WC-CRO-WIN"}
+
+
+def test_soccer_paper_metadata_supports_espn_settlement():
+    cfg = Config()
+    cfg.soccer.market_slug = "KXWC-BRA-CRO"
+    cfg.soccer.espn_event_id = "401"
+    cfg.soccer.league = "fifa.world"
+    cfg.soccer.home_team = "Brazil"
+    cfg.soccer.away_team = "Croatia"
+
+    assert paper_metadata(cfg, "home") == {
+        "event_id": "401",
+        "sport": "soccer",
+        "league": "fifa.world",
+        "home_team": "Brazil",
+        "away_team": "Croatia",
+        "selected_team": "Brazil",
+    }
+    assert paper_metadata(cfg, "draw")["selected_team"] == "draw"
+    assert paper_metadata(cfg, "away")["selected_team"] == "Croatia"
+
+
+def test_soccer_paper_metadata_falls_back_to_market_slug():
+    cfg = Config()
+    cfg.soccer.market_slug = "401"
+    cfg.soccer.home_team = "Brazil"
+    cfg.soccer.away_team = "Croatia"
+
+    assert paper_metadata(cfg, "home")["event_id"] == "401"
 
 
 def test_end_to_end_snipe_places_paper_fill():

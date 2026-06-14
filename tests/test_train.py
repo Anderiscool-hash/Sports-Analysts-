@@ -1,6 +1,6 @@
 import pandas as pd
 
-from sportedge.model.train import split_by_game
+from sportedge.model.train import clean_training_rows, split_by_game
 
 
 def _rows(game_id: str) -> pd.DataFrame:
@@ -49,3 +49,21 @@ def test_train_split_forces_holdout_games():
     assert {"g0", "g1"}.issubset(set(holdout["game_id"]))
     assert "g0" not in set(train["game_id"])
     assert "g1" not in set(cal["game_id"])
+
+
+def test_clean_training_rows_drops_late_zero_score_placeholders():
+    df = pd.DataFrame(
+        {
+            "game_id": ["opening", "late_q1", "q2", "real"],
+            "home_score": [0, 0, 0, 10],
+            "away_score": [0, 0, 0, 8],
+            "period": [1, 1, 2, 1],
+            "seconds_remaining": [2860.0, 2600.0, 1800.0, 2600.0],
+            "pre_game_home_prob": [0.5, 0.5, 0.5, 0.5],
+            "home_win": [1, 1, 1, 1],
+        }
+    )
+
+    cleaned = clean_training_rows(df)
+
+    assert cleaned["game_id"].tolist() == ["opening", "real"]

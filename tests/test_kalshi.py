@@ -9,9 +9,15 @@ import base64
 
 import pytest
 
-from sportedge.betting.executor import KalshiLiveExecutor, PaperExecutor, make_executor
+from sportedge.betting.executor import Fill, KalshiLiveExecutor, PaperExecutor, make_executor, paper_gate_status
+from sportedge.betting.paper import PaperLedger
 from sportedge.config import Config, Secrets
-from sportedge.market.kalshi import KalshiClient, cents_to_prob
+from sportedge.market.kalshi import (
+    KalshiClient,
+    cents_to_prob,
+    rejection_reason_for_team_market,
+    score_market_for_team,
+)
 
 
 def test_cents_to_prob_converts_and_clamps():
@@ -34,6 +40,143 @@ def test_get_price_none_when_no_quotes(monkeypatch):
     client = KalshiClient()
     monkeypatch.setattr(client, "get_market", lambda t: {})
     assert client.get_price("WC-BRA", "BUY") is None
+
+
+def test_get_market_snapshot_maps_display_fields(monkeypatch):
+    client = KalshiClient()
+    monkeypatch.setattr(
+        client,
+        "get_market",
+        lambda t: {
+            "ticker": t,
+            "title": "Will the Lakers win?",
+            "status": "active",
+            "yes_bid": 41,
+            "yes_ask": 44,
+            "last_price": 43,
+            "volume": "1200",
+            "volume_24h": 55,
+            "liquidity": 9000,
+            "open_interest": 88,
+            "close_time": "2026-06-14T02:00:00Z",
+        },
+    )
+
+    snap = client.get_market_snapshot("NBA-LAL-WIN")
+
+    assert snap is not None
+    assert snap.title == "Will the Lakers win?"
+    assert snap.status == "active"
+    assert snap.yes_bid == 0.41
+    assert snap.yes_ask == 0.44
+    assert snap.last_price == 0.43
+    assert snap.volume == 1200
+    assert snap.open_interest == 88
+
+
+def test_score_market_for_team_accepts_direct_quoted_winner():
+    market = {
+        "ticker": "KXNBA-SPURS-WIN",
+        "title": "Will the San Antonio Spurs win against the New York Knicks?",
+        "status": "active",
+        "yes_bid": 51,
+        "yes_ask": 54,
+        "volume": 1200,
+        "liquidity": 8000,
+    }
+
+    result = score_market_for_team(market, "San Antonio Spurs", "New York Knicks")
+
+    assert result is not None
+    assert result.ticker == "KXNBA-SPURS-WIN"
+    assert result.yes_ask == 0.54
+
+
+def test_score_market_for_team_rejects_combo_props_and_unquoted():
+    combo = {
+        "ticker": "KXCOMBO",
+        "title": "yes San Antonio Spurs,yes Jalen Brunson: 25+,yes Over 184.5 points scored",
+        "status": "active",
+        "yes_bid": 51,
+        "yes_ask": 54,
+    }
+    unquoted = {
+        "ticker": "KXNBA-SPURS-WIN",
+        "title": "Will the San Antonio Spurs win against the New York Knicks?",
+        "status": "active",
+    }
+
+    assert score_market_for_team(combo, "San Antonio Spurs", "New York Knicks") is None
+    assert score_market_for_team(unquoted, "San Antonio Spurs", "New York Knicks") is None
+    assert rejection_reason_for_team_market(combo, "San Antonio Spurs", "New York Knicks") == "not a direct team-winner market"
+    assert rejection_reason_for_team_market(unquoted, "San Antonio Spurs", "New York Knicks") == "no usable quote"
+
+
+def test_explain_team_win_market_search_returns_rejection_reasons(monkeypatch):
+    client = KalshiClient()
+    markets = [
+        {
+            "ticker": "KXCOMBO",
+            "title": "yes San Antonio Spurs,yes Jalen Brunson: 25+",
+            "status": "active",
+            "yes_ask": 40,
+        },
+        {
+            "ticker": "KXNBA-SPURS-WIN",
+            "title": "Will the San Antonio Spurs win against the New York Knicks?",
+            "status": "active",
+            "yes_bid": 51,
+            "yes_ask": 54,
+        },
+    ]
+    monkeypatch.setattr(client, "list_open_markets", lambda **kwargs: markets)
+
+    rejections = client.explain_team_win_market_search("San Antonio Spurs", "New York Knicks")
+
+    assert len(rejections) == 1
+    assert rejections[0].ticker == "KXCOMBO"
+    assert rejections[0].reason == "not a direct team-winner market"
+
+
+def test_score_market_for_team_accepts_city_name_for_multiword_team():
+    market = {
+        "ticker": "KXNBA-SPURS-WIN",
+        "title": "Will San Antonio win against the New York Knicks?",
+        "status": "active",
+        "yes_bid": 51,
+        "yes_ask": 54,
+    }
+
+    result = score_market_for_team(market, "San Antonio Spurs", "New York Knicks")
+
+    assert result is not None
+    assert result.ticker == "KXNBA-SPURS-WIN"
+
+
+def test_discover_team_win_market_returns_best_candidate(monkeypatch):
+    client = KalshiClient()
+    markets = [
+        {
+            "ticker": "KXCOMBO",
+            "title": "yes San Antonio,yes Jalen Brunson: 25+",
+            "status": "active",
+            "yes_ask": 40,
+        },
+        {
+            "ticker": "KXNBA-SPURS-WIN",
+            "title": "Will the San Antonio Spurs win against the New York Knicks?",
+            "status": "active",
+            "yes_bid": 51,
+            "yes_ask": 54,
+            "liquidity": 8000,
+        },
+    ]
+    monkeypatch.setattr(client, "list_open_markets", lambda **kwargs: markets)
+
+    result = client.discover_team_win_market("San Antonio Spurs", "New York Knicks")
+
+    assert result is not None
+    assert result.ticker == "KXNBA-SPURS-WIN"
 
 
 def test_build_order_payload_shape():
@@ -121,14 +264,167 @@ def test_place_order_signs_and_posts(monkeypatch):
 # ----- venue-aware executor selection -----
 
 
-def test_make_executor_kalshi_live_when_keys_present():
+def _proof_ledger(path, fills: int = 25, pnl_per_fill: float = 1.0):
+    ledger = PaperLedger(str(path))
+    settlement = 1.0 if pnl_per_fill >= 0 else 0.0
+    price = 0.50
+    for i in range(fills):
+        ledger.append(
+            Fill(
+                ts=float(i),
+                side="BUY",
+                size=1.0,
+                price=price,
+                model_p=0.70,
+                edge=0.20,
+                mode="paper",
+                token_id=f"tok-{i}",
+            )
+        )
+    if pnl_per_fill >= 0:
+        return ledger
+    return ledger
+
+
+def test_make_executor_kalshi_live_when_keys_and_paper_proof_present(tmp_path):
     cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 1
+    cfg.paper_gate.min_settled_fills = 0
+    ledger = tmp_path / "paper.parquet"
+    PaperLedger(str(ledger)).append(
+        Fill(1.0, "BUY", 5.0, 0.50, 0.70, 0.20, "paper", "tok")
+    )
     secrets = _gen_secrets()
-    assert isinstance(make_executor(cfg, secrets), KalshiLiveExecutor)
+    assert isinstance(make_executor(cfg, secrets, paper_ledger_path=str(ledger)), KalshiLiveExecutor)
+
+
+def test_make_executor_blocks_live_with_only_open_paper_fills(tmp_path):
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 1
+    ledger = tmp_path / "paper.parquet"
+    PaperLedger(str(ledger)).append(
+        Fill(1.0, "BUY", 5.0, 0.50, 0.70, 0.20, "paper", "tok")
+    )
+
+    ex = make_executor(cfg, _gen_secrets(), paper_ledger_path=str(ledger))
+
+    assert type(ex) is PaperExecutor
+    ok, reason = paper_gate_status(cfg, str(ledger))
+    assert ok is False
+    assert "settled fills" in reason
+
+
+def test_paper_gate_blocks_when_realized_pnl_is_negative(tmp_path, monkeypatch):
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 2
+    cfg.paper_gate.min_settled_fills = 1
+    cfg.paper_gate.min_realized_pnl = 0.0
+    cfg.paper_gate.min_total_pnl = -999.0
+    ledger = tmp_path / "paper.parquet"
+    store = PaperLedger(str(ledger))
+    store.append(Fill(1.0, "BUY", 5.0, 0.50, 0.70, 0.20, "paper", "settled-loser"))
+    store.append(Fill(2.0, "BUY", 5.0, 0.50, 0.70, 0.20, "paper", "open-winner"))
+    monkeypatch.setattr(
+        "sportedge.betting.report.collect_all_settlements",
+        lambda fills: {"settled-loser": 0.0},
+    )
+
+    ok, reason = paper_gate_status(cfg, str(ledger))
+
+    assert ok is False
+    assert "realized PnL" in reason
+
+
+def test_paper_gate_counts_espn_final_settlements(tmp_path, monkeypatch):
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 1
+    cfg.paper_gate.min_settled_fills = 1
+    cfg.paper_gate.min_realized_pnl = 0.0
+    ledger = tmp_path / "paper.parquet"
+    PaperLedger(str(ledger)).append(
+        Fill(
+            ts=1.0,
+            side="BUY",
+            size=5.0,
+            price=0.50,
+            model_p=0.70,
+            edge=0.20,
+            mode="paper",
+            token_id="tok",
+            event_id="401",
+            sport="basketball",
+            league="nba",
+            home_team="Lakers",
+            away_team="Celtics",
+            selected_team="Lakers",
+        )
+    )
+
+    from sportedge.types import LiveDetail
+
+    detail = LiveDetail(
+        sport="basketball",
+        league="nba",
+        home_team="Lakers",
+        away_team="Celtics",
+        home_score=101,
+        away_score=99,
+        status="post",
+    )
+    monkeypatch.setattr("sportedge.betting.report.get_game_detail", lambda *args: detail)
+
+    ok, reason = paper_gate_status(cfg, str(ledger))
+
+    assert ok is True
+    assert "1 settled" in reason
+
+
+def test_paper_gate_blocks_when_realized_roi_is_too_low(tmp_path, monkeypatch):
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 1
+    cfg.paper_gate.min_settled_fills = 1
+    cfg.paper_gate.min_realized_pnl = 0.0
+    cfg.paper_gate.min_realized_roi = 0.25
+    ledger = tmp_path / "paper.parquet"
+    PaperLedger(str(ledger)).append(
+        Fill(1.0, "BUY", 10.0, 0.95, 0.99, 0.04, "paper", "small-winner")
+    )
+    monkeypatch.setattr(
+        "sportedge.betting.report.collect_all_settlements",
+        lambda fills: {"small-winner": 1.0},
+    )
+
+    ok, reason = paper_gate_status(cfg, str(ledger))
+
+    assert ok is False
+    assert "realized ROI" in reason
+
+
+def test_make_executor_blocks_live_without_paper_proof(tmp_path):
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.min_fills = 2
+    ledger = tmp_path / "paper.parquet"
+    PaperLedger(str(ledger)).append(
+        Fill(1.0, "BUY", 5.0, 0.50, 0.70, 0.20, "paper", "tok")
+    )
+
+    ex = make_executor(cfg, _gen_secrets(), paper_ledger_path=str(ledger))
+
+    assert type(ex) is PaperExecutor
+    ok, reason = paper_gate_status(cfg, str(ledger))
+    assert ok is False
+    assert "needs 2 fills" in reason
+
+
+def test_make_executor_live_when_paper_gate_disabled():
+    cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.enabled = False
+    assert isinstance(make_executor(cfg, _gen_secrets()), KalshiLiveExecutor)
 
 
 def test_make_executor_kalshi_falls_back_to_paper_without_keys():
     cfg = Config(mode="live", confirm_live=True)
+    cfg.paper_gate.enabled = False
     ex = make_executor(cfg, Secrets())
     assert type(ex) is PaperExecutor
 

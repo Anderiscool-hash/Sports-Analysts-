@@ -34,3 +34,18 @@ def test_strategy_rejects_thin_edge():
     s = Strategy(min_edge=0.10, kelly_fraction=0.25, max_stake=5, bankroll=100)
     thin = BottomSignal(True, price=0.55, model_p=0.58, edge=0.03)
     assert s.decide(thin) is None
+
+
+def test_strategy_rejects_prices_outside_configured_band():
+    s = Strategy(
+        min_edge=0.04,
+        kelly_fraction=0.25,
+        max_stake=5,
+        bankroll=100,
+        min_price=0.05,
+        max_price=0.95,
+    )
+
+    assert s.decide(BottomSignal(True, price=0.0025, model_p=0.60, edge=0.5975)) is None
+    assert s.decide(BottomSignal(True, price=0.99, model_p=1.00, edge=0.01)) is None
+    assert s.decide(BottomSignal(True, price=0.55, model_p=0.70, edge=0.15)) is not None
