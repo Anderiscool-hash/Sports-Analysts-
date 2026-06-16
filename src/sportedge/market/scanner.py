@@ -31,7 +31,7 @@ def scan_game_markets(
     statuses: set[str] | None = None,
 ) -> list[GameMarketCoverage]:
     """Return Kalshi coverage for the supplied ESPN games."""
-    sports = sports or {"basketball"}
+    sports = sports or {"basketball", "soccer"}
     statuses = statuses or {"in", "pre"}
     coverage: list[GameMarketCoverage] = []
     for game in games:

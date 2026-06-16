@@ -31,12 +31,15 @@ def test_scan_game_markets_prioritizes_games_with_markets():
     assert rows[1].has_market is False
 
 
-def test_scan_game_markets_filters_sport_and_status():
+def test_scan_game_markets_includes_soccer_and_filters_finished_games():
     games = [
         GameCandidate("basketball", "nba", "1", "Lakers", "Celtics", "post", "FT"),
-        GameCandidate("soccer", "eng.1", "2", "Arsenal", "Chelsea", "in", "45'"),
+        GameCandidate("soccer", "fifa.world", "2", "France", "Senegal", "in", "23'"),
     ]
 
     rows = scan_game_markets(games, _Client())
 
-    assert rows == []
+    # Finished (post) game is filtered; the live World Cup game is now scanned.
+    assert len(rows) == 1
+    assert rows[0].game.sport == "soccer"
+    assert rows[0].game.event_id == "2"

@@ -612,16 +612,25 @@ def pick_game(console: Console, candidates: list[GameCandidate]) -> GameCandidat
 
 
 def apply_market_coverage(cfg: Config, coverage: GameMarketCoverage) -> None:
-    """Apply scanner-discovered markets to the in-memory config for this run."""
+    """Apply scanner-discovered markets to the in-memory config for this run.
+
+    Handles basketball (home/away win) and soccer (home/away sides of the 1X2;
+    the draw contract stays config-supplied)."""
     game = coverage.game
-    if game.sport != "basketball":
-        return
-    cfg.market.home_team = game.home_team
-    cfg.market.away_team = game.away_team
-    if coverage.home_market is not None:
-        cfg.market.kalshi_ticker = coverage.home_market.ticker
-    if coverage.away_market is not None:
-        cfg.market.kalshi_away_ticker = coverage.away_market.ticker
+    if game.sport == "basketball":
+        cfg.market.home_team = game.home_team
+        cfg.market.away_team = game.away_team
+        if coverage.home_market is not None:
+            cfg.market.kalshi_ticker = coverage.home_market.ticker
+        if coverage.away_market is not None:
+            cfg.market.kalshi_away_ticker = coverage.away_market.ticker
+    elif game.sport == "soccer":
+        cfg.soccer.home_team = game.home_team
+        cfg.soccer.away_team = game.away_team
+        if coverage.home_market is not None:
+            cfg.soccer.kalshi_home_ticker = coverage.home_market.ticker
+        if coverage.away_market is not None:
+            cfg.soccer.kalshi_away_ticker = coverage.away_market.ticker
 
 
 def pick_ready_game(
@@ -691,19 +700,35 @@ def auto_configure_kalshi_market(
     client: KalshiClient,
     console: Console,
 ) -> None:
-    """Fill missing Kalshi tickers for this run using conservative discovery."""
-    if candidate.sport != "basketball":
+    """Fill missing Kalshi tickers for this run using conservative discovery.
+
+    Works for both basketball (home/away win) and soccer (home/away win sides of
+    the 1X2; the draw contract stays config-supplied). Discovery itself is sport
+    agnostic, so the only thing that differs is which config block we populate.
+    """
+    if candidate.sport == "basketball":
+        home_set, away_set = cfg.market.kalshi_ticker, cfg.market.kalshi_away_ticker
+    elif candidate.sport == "soccer":
+        home_set, away_set = cfg.soccer.kalshi_home_ticker, cfg.soccer.kalshi_away_ticker
+    else:
         return
+
     found = []
-    if not cfg.market.kalshi_ticker:
+    if not home_set:
         result = client.discover_team_win_market(candidate.home_team, candidate.away_team)
         if result is not None:
-            cfg.market.kalshi_ticker = result.ticker
+            if candidate.sport == "basketball":
+                cfg.market.kalshi_ticker = result.ticker
+            else:
+                cfg.soccer.kalshi_home_ticker = result.ticker
             found.append((candidate.home_team, result))
-    if not cfg.market.kalshi_away_ticker:
+    if not away_set:
         result = client.discover_team_win_market(candidate.away_team, candidate.home_team)
         if result is not None:
-            cfg.market.kalshi_away_ticker = result.ticker
+            if candidate.sport == "basketball":
+                cfg.market.kalshi_away_ticker = result.ticker
+            else:
+                cfg.soccer.kalshi_away_ticker = result.ticker
             found.append((candidate.away_team, result))
     if not found:
         console.print(
@@ -711,8 +736,12 @@ def auto_configure_kalshi_market(
             "running model-only/paper-signal disabled for this game.[/]"
         )
         return
-    cfg.market.home_team = candidate.home_team
-    cfg.market.away_team = candidate.away_team
+    if candidate.sport == "basketball":
+        cfg.market.home_team = candidate.home_team
+        cfg.market.away_team = candidate.away_team
+    else:
+        cfg.soccer.home_team = candidate.home_team
+        cfg.soccer.away_team = candidate.away_team
     for team, result in found:
         console.print(
             f"Auto-selected Kalshi market: [cyan]{result.ticker}[/] "

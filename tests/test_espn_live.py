@@ -379,6 +379,38 @@ def test_auto_configure_kalshi_market_can_set_away_ticker_only():
     assert cfg.market.kalshi_away_ticker == "KXNBA-KNICKS-WIN"
 
 
+def test_auto_configure_kalshi_market_sets_soccer_tickers():
+    cfg = Config()
+    candidate = GameCandidate(
+        "soccer",
+        "fifa.world",
+        "701",
+        "France",
+        "Senegal",
+        "in",
+        "23'",
+    )
+
+    class _Client:
+        def discover_team_win_market(self, team, opponent):  # noqa: ARG002
+            return KalshiDiscoveryResult(
+                ticker=f"KXWC-{team[:3].upper()}-WIN",
+                title=f"Will {team} win?",
+                team=team,
+                score=8.0,
+                yes_ask=0.50,
+            )
+
+    auto_configure_kalshi_market(cfg, candidate, _Client(), _FakeConsole(""))
+
+    assert cfg.soccer.home_team == "France"
+    assert cfg.soccer.away_team == "Senegal"
+    assert cfg.soccer.kalshi_home_ticker == "KXWC-FRA-WIN"
+    assert cfg.soccer.kalshi_away_ticker == "KXWC-SEN-WIN"
+    # basketball block must stay untouched for a soccer game
+    assert cfg.market.kalshi_ticker == ""
+
+
 def test_apply_market_coverage_sets_home_and_away_tickers():
     cfg = Config()
     game = GameCandidate("basketball", "nba", "401", "Lakers", "Celtics", "in", "Q2")
