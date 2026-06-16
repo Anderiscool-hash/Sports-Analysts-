@@ -46,7 +46,10 @@ class PaperLedger:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         current = self.load()
         row = pd.DataFrame([asdict(fill)], columns=LEDGER_COLUMNS)
-        pd.concat([current, row], ignore_index=True).to_parquet(self.path, index=False)
+        # Concatenating onto an empty frame triggers a pandas FutureWarning and can
+        # drop dtypes; write the first row directly instead.
+        combined = row if current.empty else pd.concat([current, row], ignore_index=True)
+        combined.to_parquet(self.path, index=False)
 
     def summary(
         self,
