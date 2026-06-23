@@ -52,6 +52,7 @@ soccer:
   away_team: ""
   lambda_home: 1.45
   lambda_away: 1.15
+  model_path: ""            # blank = built-in live Poisson model
   kalshi_home_ticker: ""
   kalshi_draw_ticker: ""
   kalshi_away_ticker: ""

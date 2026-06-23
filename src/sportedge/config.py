@@ -133,6 +133,9 @@ class SoccerMarketConfig(BaseModel):
     # Pre-match full-match expected goals (calibration output; sensible WC defaults).
     lambda_home: float = 1.45
     lambda_away: float = 1.15
+    # Optional fitted soccer estimator. Blank uses the built-in live Poisson model.
+    # This must not point at the NBA estimator in ``model.path``.
+    model_path: str = ""
     # Kalshi 1X2 contract tickers; one per outcome.
     kalshi_home_ticker: str = ""
     kalshi_draw_ticker: str = ""

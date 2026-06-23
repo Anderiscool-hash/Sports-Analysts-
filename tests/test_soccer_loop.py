@@ -63,6 +63,14 @@ def test_soccer_paper_metadata_falls_back_to_market_slug():
     assert paper_metadata(cfg, "home")["event_id"] == "401"
 
 
+def test_empty_soccer_model_path_uses_poisson_fallback():
+    model = SoccerWinProbModel.load("")
+    state = SoccerGameState("Brazil", "Croatia", 1, 0, minute=85)
+
+    assert model.is_trained is False
+    assert model.predict(state).home > 0.85
+
+
 def test_end_to_end_snipe_places_paper_fill():
     # Home up 1-0 with 5 minutes left -> model strongly favours home.
     state = SoccerGameState("Brazil", "Croatia", 1, 0, minute=85)

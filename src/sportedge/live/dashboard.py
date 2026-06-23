@@ -26,7 +26,9 @@ from rich.table import Table
 from rich.text import Text
 
 from sportedge.betting.executor import PaperExecutor
+from sportedge.betting.flow import detect_flow
 from sportedge.betting.paper import PaperLedger
+from sportedge.betting.risk import RiskManager, state_from_fills
 from sportedge.betting.strategy import Strategy
 from sportedge.config import Config, load_config, load_secrets
 from sportedge.data.espn_live import get_game_detail, list_live_games
@@ -303,12 +305,26 @@ def settlement_marks(cfg: Config, detail: LiveDetail) -> dict[str, float]:
 
 
 class PaperTradingEngine:
-    """Dashboard-local paper signal engine using the same strategy spine as loops."""
+    """Dashboard-local signal engine using the same strategy spine as loops.
 
-    def __init__(self, cfg: Config, ledger_path: str):
+    It defaults to :class:`PaperExecutor`; the localhost web UI may inject a live
+    executor only after its separate demo-mode safety checks have passed.
+    """
+
+    def __init__(
+        self,
+        cfg: Config,
+        ledger_path: str,
+        executor=None,
+        history_path: str | None = None,
+        market_client: KalshiClient | None = None,
+    ):
         self.cfg = cfg
         self.ledger = PaperLedger(ledger_path)
-        self.executor = PaperExecutor(ledger_path=ledger_path)
+        self.executor = executor or PaperExecutor(ledger_path=ledger_path)
+        self.history_path = history_path
+        self.market_client = market_client
+        self.risk_manager = RiskManager(cfg.risk)
         self.strategy = Strategy(
             cfg.edge.min_edge,
             cfg.kelly_fraction,
@@ -335,9 +351,15 @@ class PaperTradingEngine:
         detail: LiveDetail,
         readout_rows: list[ReadoutRow],
         event_id: str = "",
+        flow_signals: dict | None = None,
     ) -> list[PaperSignalRow]:
         specs = outcome_specs(self.cfg, detail.sport, detail.home_team, detail.away_team)
-        exposure = float(self.ledger.summary().get("open_exposure", 0.0))
+        is_live = self.executor.mode == "live"
+        exposure = (
+            float(self.executor.staked)
+            if is_live
+            else float(self.ledger.summary().get("open_exposure", 0.0))
+        )
         rows: list[PaperSignalRow] = []
         for (label, ticker), (_label, model_p, price, edge, _trend) in zip(specs, readout_rows):
             if not ticker:
@@ -359,6 +381,24 @@ class PaperTradingEngine:
             if exposure + order.size > self.cfg.bankroll:
                 rows.append((label, ticker, True, "SKIP", "bankroll exposure cap"))
                 continue
+            if is_live:
+                decision = self.risk_manager.check(
+                    order_size=order.size,
+                    token_id=ticker,
+                    event_id=event_id,
+                    state=state_from_fills(self.executor.fills, self.cfg.bankroll),
+                )
+                if not decision.allowed:
+                    rows.append((label, ticker, True, "BLOCKED", decision.reason))
+                    continue
+            if self.cfg.flow.mode == "confirm":
+                flow = (flow_signals or {}).get(ticker)
+                if flow is None and self.market_client is not None:
+                    flow = detect_flow(self.market_client.get_trades(ticker), self.cfg.flow)
+                if flow is None or not flow.confirms_buy:
+                    reason = flow.reason if flow is not None else "flow unavailable"
+                    rows.append((label, ticker, True, "BLOCKED", f"flow: {reason}"))
+                    continue
             selected_team = label.removesuffix(" win")
             fill = self.executor.place(
                 order,
@@ -372,8 +412,13 @@ class PaperTradingEngine:
                     "selected_team": selected_team,
                 },
             )
+            if is_live and self.history_path:
+                from sportedge.betting.history import ExecutionHistory
+
+                ExecutionHistory(self.history_path).append(fill)
             exposure += fill.size
-            rows.append((label, ticker, True, "PAPER BUY", f"{fill.size:.2f}@{fill.price:.3f}"))
+            action = "LIVE BUY" if is_live else "PAPER BUY"
+            rows.append((label, ticker, True, action, f"{fill.size:.2f}@{fill.price:.3f}"))
         return rows
 
     def summary(
@@ -786,7 +831,8 @@ def run(
     if candidate is None:
         return
 
-    model = load_model(candidate.sport, cfg.model.path)
+    model_path = cfg.model.path if candidate.sport == "basketball" else cfg.soccer.model_path
+    model = load_model(candidate.sport, model_path)
     auto_configure_kalshi_market(cfg, candidate, client, console)
     recorder = LiveTrainingRecorder(training_cache) if record_training else None
     paper_engine = PaperTradingEngine(cfg, paper_ledger) if paper_trading else None

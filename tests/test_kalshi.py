@@ -331,6 +331,37 @@ def test_cancel_order_uses_v2_event_path_and_signs_full_path(monkeypatch):
     )
 
 
+def test_get_balance_uses_signed_portfolio_endpoint(monkeypatch):
+    client = KalshiClient(secrets=_gen_secrets())
+    captured = {}
+
+    def fake_auth(method, path, **kwargs):
+        captured.update(method=method, path=path, kwargs=kwargs)
+        return {"balance": 10000, "balance_dollars": "100.00", "portfolio_value": 0}
+
+    monkeypatch.setattr(client, "_auth_request", fake_auth)
+
+    result = client.get_balance()
+
+    assert result["balance_dollars"] == "100.00"
+    assert captured["method"] == "GET"
+    assert captured["path"] == "/portfolio/balance"
+
+
+def test_get_trades_can_read_global_tape_without_ticker(monkeypatch):
+    client = KalshiClient()
+    captured = {}
+
+    def fake_get(path, params):
+        captured.update(path=path, params=params)
+        return {"trades": [{"ticker": "KXTEST"}]}
+
+    monkeypatch.setattr(client, "_get", fake_get)
+
+    assert client.get_trades(limit=1000) == [{"ticker": "KXTEST"}]
+    assert captured == {"path": "/markets/trades", "params": {"limit": 1000}}
+
+
 # ----- venue-aware executor selection -----
 
 

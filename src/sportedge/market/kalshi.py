@@ -542,13 +542,16 @@ class KalshiClient:
         return self.place_limit_order(ticker, count, price_cents)
 
     # ----- trade feed (no auth) -----
-    def get_trades(self, ticker: str, limit: int = 100) -> list[dict]:
+    def get_trades(self, ticker: str = "", limit: int = 100) -> list[dict]:
         """Recent public trades for a market, newest first. Returns ``[]`` on error.
 
         Feeds the optional whale / momentum confirmation scanner. No auth required.
         """
         try:
-            data = self._get("/markets/trades", {"ticker": ticker, "limit": limit})
+            params: dict[str, object] = {"limit": limit}
+            if ticker:
+                params["ticker"] = ticker
+            data = self._get("/markets/trades", params)
         except Exception:  # noqa: BLE001 - confirmation is best-effort
             return []
         return data.get("trades", []) or []
@@ -638,6 +641,14 @@ class KalshiClient:
         if not order_id:
             return {}
         return self._auth_request("GET", f"/portfolio/orders/{order_id}").get("order", {})
+
+    def get_balance(self) -> dict:
+        """Return authenticated available cash and portfolio value.
+
+        Kalshi returns integer cent fields plus ``balance_dollars`` as a fixed-point
+        string. This read-only call is also used to validate UI credentials.
+        """
+        return self._auth_request("GET", "/portfolio/balance")
 
     def cancel_order(self, order_id: str) -> dict:
         """Cancel a resting order through Kalshi's v2 event-order endpoint.

@@ -83,7 +83,7 @@ def run(
         cfg.mode = mode
     secrets = load_secrets()
 
-    model = SoccerWinProbModel.load(cfg.model.path)
+    model = SoccerWinProbModel.load(cfg.soccer.model_path)
     client = _market_client(cfg, secrets)
     strategy = Strategy(
         cfg.edge.min_edge,

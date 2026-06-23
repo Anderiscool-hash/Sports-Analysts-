@@ -105,11 +105,13 @@ class SoccerWinProbModel:
         self._estimator = estimator
 
     @classmethod
-    def load(cls, path: str) -> "SoccerWinProbModel":
+    def load(cls, path: str) -> SoccerWinProbModel:
         from pathlib import Path
 
+        if not path:
+            return cls(None)
         p = Path(path)
-        if not p.exists():
+        if not p.is_file():
             return cls(None)
         import joblib  # local import: optional until a model exists
 
@@ -123,10 +125,15 @@ class SoccerWinProbModel:
         """P(home) / P(draw) / P(away) for the 90-minute regulation result."""
         if self._estimator is None:
             return poisson_winprob(state)
-        from sportedge.model.soccer_features import (
-            features_to_vector,
-            state_to_features,
-        )
+        try:
+            from sportedge.model.soccer_features import (
+                features_to_vector,
+                state_to_features,
+            )
+        except ImportError:
+            # A fitted soccer feature pipeline is optional. Never let a stale or
+            # incorrectly configured artifact break the closed-form live model.
+            return poisson_winprob(state)
 
         x = features_to_vector(state_to_features(state)).reshape(1, -1)
         probs = self._estimator.predict_proba(x)[0]

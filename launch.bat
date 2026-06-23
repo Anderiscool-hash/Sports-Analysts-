@@ -19,22 +19,30 @@ echo.
 echo ============================================================
 echo   SportEdge
 echo ============================================================
-echo   [1] Watch live games + paper-track (real games)
-echo   [2] Paper-trade simulation over cached data (see PnL now)
-echo   [3] Arm: wait for a Kalshi-covered game (uses config safety gates)
-echo   [4] Paper P^&L report
+echo   [1] Open browser UI (recommended)
+echo   [2] Terminal dashboard
+echo   [3] Paper-trade simulation over cached data
+echo   [4] Arm: wait for a Kalshi-covered game (uses safety gates)
+echo   [5] Paper P^&L report
 echo   [Q] Quit
 echo ============================================================
 set "choice="
 set /p choice="Choose an option: "
 
-if /i "%choice%"=="1" goto opt_live
-if /i "%choice%"=="2" goto opt_sim
-if /i "%choice%"=="3" goto opt_arm
-if /i "%choice%"=="4" goto opt_report
+if /i "%choice%"=="1" goto opt_ui
+if /i "%choice%"=="2" goto opt_live
+if /i "%choice%"=="3" goto opt_sim
+if /i "%choice%"=="4" goto opt_arm
+if /i "%choice%"=="5" goto opt_report
 if /i "%choice%"=="Q" goto end
 echo Unrecognized choice: "%choice%"
 goto menu
+
+:opt_ui
+echo.
+echo Opening the local SportEdge browser UI. Ctrl-C stops the server.
+%PYEXE% -m sportedge.live.web_dashboard
+goto after
 
 :opt_live
 echo.
