@@ -33,7 +33,10 @@ echo [3/4] Packaging with PyInstaller...
 pyinstaller --noconfirm --clean --onedir --name SportEdge ^
     --paths src ^
     --collect-submodules sportedge ^
+    --collect-submodules sklearn ^
+    --collect-submodules scipy ^
     --collect-data sklearn ^
+    --hidden-import joblib ^
     "%SRC%" || goto :fail
 
 echo [4/4] Copying runtime assets beside the exe...
