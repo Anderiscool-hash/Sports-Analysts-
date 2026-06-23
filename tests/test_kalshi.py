@@ -232,33 +232,103 @@ def test_auth_headers_require_keys():
         client.auth_headers("POST", "/portfolio/orders")
 
 
-def test_place_order_signs_and_posts(monkeypatch):
+def test_place_order_signs_full_path_and_posts(monkeypatch):
     pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
     secrets = _gen_secrets()
     client = KalshiClient(secrets=secrets)
 
     captured = {}
 
     class _Resp:
+        content = b"{}"
+
         def raise_for_status(self):
             pass
 
         def json(self):
             return {"order": {"status": "resting"}}
 
-    def fake_post(url, json=None, headers=None, timeout=None):
-        captured["url"] = url
-        captured["json"] = json
-        captured["headers"] = headers
+    def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
+        captured.update(method=method, url=url, json=json, headers=headers)
         return _Resp()
 
-    monkeypatch.setattr("sportedge.market.kalshi.requests.post", fake_post)
+    monkeypatch.setattr("sportedge.market.kalshi.requests.request", fake_request)
     result = client.place_order("WC-BRA-WIN", stake_usd=5.0, price_prob=0.5)
 
     assert result == {"order": {"status": "resting"}}
-    assert captured["url"].endswith("/portfolio/orders")
+    assert captured["method"] == "POST"
+    # v2 create-order endpoint, signed against the FULL path incl. /trade-api/v2.
+    assert captured["url"].endswith("/trade-api/v2/portfolio/events/orders")
+    # v2 fixed-point payload: buying YES is side "bid"; price/count are dollar strings.
     assert captured["json"]["ticker"] == "WC-BRA-WIN"
-    assert "KALSHI-ACCESS-SIGNATURE" in captured["headers"]
+    assert captured["json"]["side"] == "bid"
+    assert captured["json"]["price"] == "0.5000"
+    assert captured["json"]["count"] == "10.00"  # $5 / $0.50
+    assert captured["json"]["time_in_force"]
+    assert captured["json"]["self_trade_prevention_type"]
+
+    # The signature must verify against the v2 full-path message.
+    ts = captured["headers"]["KALSHI-ACCESS-TIMESTAMP"]
+    message = f"{ts}POST/trade-api/v2/portfolio/events/orders"
+    client._load_private_key().public_key().verify(
+        base64.b64decode(captured["headers"]["KALSHI-ACCESS-SIGNATURE"]),
+        message.encode(),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.DIGEST_LENGTH),
+        hashes.SHA256(),
+    )
+
+
+def test_cancel_order_uses_v2_event_path_and_signs_full_path(monkeypatch):
+    pytest.importorskip("cryptography")
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    client = KalshiClient(secrets=_gen_secrets())
+    order_id = "daf09c33-1618-4100-9465-050e33b5420a"
+    response = {
+        "order_id": order_id,
+        "client_order_id": "client-id",
+        "reduced_by": "1.00",
+        "ts_ms": 1700000000000,
+    }
+    captured = {}
+
+    class _Resp:
+        content = b"{}"
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return response
+
+    def fake_request(method, url, params=None, json=None, headers=None, timeout=None):
+        captured.update(method=method, url=url, json=json, headers=headers)
+        return _Resp()
+
+    monkeypatch.setattr("sportedge.market.kalshi.requests.request", fake_request)
+
+    assert client.cancel_order(order_id) == response
+    assert captured["method"] == "DELETE"
+    assert captured["url"].endswith(
+        f"/trade-api/v2/portfolio/events/orders/{order_id}"
+    )
+    assert captured["json"] is None
+
+    ts = captured["headers"]["KALSHI-ACCESS-TIMESTAMP"]
+    message = f"{ts}DELETE/trade-api/v2/portfolio/events/orders/{order_id}"
+    client._load_private_key().public_key().verify(
+        base64.b64decode(captured["headers"]["KALSHI-ACCESS-SIGNATURE"]),
+        message.encode(),
+        padding.PSS(
+            mgf=padding.MGF1(hashes.SHA256()),
+            salt_length=padding.PSS.DIGEST_LENGTH,
+        ),
+        hashes.SHA256(),
+    )
 
 
 # ----- venue-aware executor selection -----

@@ -6,6 +6,11 @@ Four independent switches are required before any real order can be sent:
   2. config.confirm_live is True   (both checked by config.live_enabled)
   3. complete Kalshi secrets present
   4. paper ledger proof passes config.paper_gate
+
+The live path borrows Krypt-Trader's order mechanics: order-book-aware limit
+pricing, a short fill-poll window, and auto-cancel of any unfilled remainder so a
+score-lag snipe never fills *after* the market has already corrected. The recorded
+fill reflects what actually executed (count + average price), not the quote.
 """
 
 from __future__ import annotations
@@ -13,8 +18,10 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
+from sportedge.betting.execution_policy import compute_limit_price_cents
+from sportedge.betting.reconcile import is_terminal, parse_kalshi_order
 from sportedge.betting.strategy import Order
-from sportedge.config import Config, Secrets
+from sportedge.config import Config, ExecutionConfig, Secrets
 
 
 @dataclass
@@ -33,6 +40,24 @@ class Fill:
     home_team: str = ""
     away_team: str = ""
     selected_team: str = ""
+    # Live-only execution detail (not persisted to the paper ledger).
+    order_id: str = ""
+    status: str = ""           # "filled" | "partial" | "unfilled" | "paper"
+    requested_count: int = 0
+    filled_count: int = 0
+    avg_price: float = 0.0
+
+
+def _fill_metadata(metadata: dict[str, str] | None) -> dict[str, str]:
+    metadata = metadata or {}
+    return {
+        "event_id": metadata.get("event_id", ""),
+        "sport": metadata.get("sport", ""),
+        "league": metadata.get("league", ""),
+        "home_team": metadata.get("home_team", ""),
+        "away_team": metadata.get("away_team", ""),
+        "selected_team": metadata.get("selected_team", ""),
+    }
 
 
 class PaperExecutor:
@@ -48,13 +73,21 @@ class PaperExecutor:
     def staked(self) -> float:
         return sum(f.size for f in self.fills)
 
+    def _record(self, fill: Fill) -> Fill:
+        """Append a fill to memory and (when configured) the persistent ledger."""
+        self.fills.append(fill)
+        if self.ledger_path:
+            from sportedge.betting.paper import PaperLedger
+
+            PaperLedger(self.ledger_path).append(fill)
+        return fill
+
     def place(
         self,
         order: Order,
         token_id: str = "",
         metadata: dict[str, str] | None = None,
     ) -> Fill:
-        metadata = metadata or {}
         fill = Fill(
             ts=time.time(),
             side=order.side,
@@ -64,36 +97,39 @@ class PaperExecutor:
             edge=order.edge,
             mode=self.mode,
             token_id=token_id,
-            event_id=metadata.get("event_id", ""),
-            sport=metadata.get("sport", ""),
-            league=metadata.get("league", ""),
-            home_team=metadata.get("home_team", ""),
-            away_team=metadata.get("away_team", ""),
-            selected_team=metadata.get("selected_team", ""),
+            status="paper",
+            **_fill_metadata(metadata),
         )
-        self.fills.append(fill)
-        if self.ledger_path:
-            from sportedge.betting.paper import PaperLedger
-
-            PaperLedger(self.ledger_path).append(fill)
-        return fill
+        return self._record(fill)
 
 
 class KalshiLiveExecutor(PaperExecutor):
     """Sends real signed orders to the Kalshi exchange. Inherits paper bookkeeping.
 
-    Built only when every safety switch is on AND Kalshi keys are present.
-    A stake in USDC becomes whole YES contracts inside the client.
+    Built only when every safety switch is on AND Kalshi keys are present. A stake
+    in USDC becomes whole YES contracts at the order-book-aware limit price; the
+    order is polled for fills until ``order_expiration_sec`` then any remainder is
+    canceled. ``clock``/``sleep`` are injectable so the poll loop is testable.
     """
 
     mode = "live"
 
-    def __init__(self, secrets: Secrets) -> None:
+    def __init__(
+        self,
+        secrets: Secrets,
+        execution: ExecutionConfig | None = None,
+        *,
+        clock=time.time,
+        sleep=time.sleep,
+    ) -> None:
         super().__init__()
         if not secrets.kalshi_complete:
             raise ValueError("KalshiLiveExecutor requires complete Kalshi secrets")
         self.secrets = secrets
+        self.execution = execution or ExecutionConfig()
         self._client = None
+        self._clock = clock
+        self._sleep = sleep
 
     def _kalshi(self):
         if self._client is None:
@@ -102,14 +138,91 @@ class KalshiLiveExecutor(PaperExecutor):
             self._client = KalshiClient(self.secrets.kalshi_host, self.secrets)
         return self._client
 
+    def _client_order_id(self, token_id: str) -> str:
+        return f"se-{token_id or 'na'}-{int(self._clock() * 1000)}"
+
+    def _await_fill(self, client, order_id: str, initial_order: dict, requested: int):
+        """Poll a resting order until terminal or expired, then cancel any rest."""
+        parsed = parse_kalshi_order(initial_order)
+        cfg = self.execution
+
+        if cfg.order_expiration_sec <= 0:
+            # Expiry disabled: do a single best-effort reconcile, leave any rest.
+            if order_id and not is_terminal(parsed):
+                try:
+                    parsed = parse_kalshi_order(client.get_order(order_id))
+                except Exception:  # noqa: BLE001 - keep the initial read
+                    pass
+            return parsed
+
+        deadline = self._clock() + cfg.order_expiration_sec
+        while order_id and not is_terminal(parsed) and self._clock() < deadline:
+            self._sleep(cfg.fill_poll_seconds)
+            try:
+                parsed = parse_kalshi_order(client.get_order(order_id))
+            except Exception:  # noqa: BLE001 - transient; keep polling until deadline
+                continue
+
+        if order_id and parsed.remaining > 0 and not is_terminal(parsed):
+            try:
+                client.cancel_order(order_id)
+                parsed = parse_kalshi_order(client.get_order(order_id))
+            except Exception:  # noqa: BLE001 - cancel/reconcile is best-effort
+                pass
+        return parsed
+
     def place(
         self,
         order: Order,
         token_id: str = "",
         metadata: dict[str, str] | None = None,
     ) -> Fill:
-        self._kalshi().place_order(token_id, order.size, order.price)
-        return super().place(order, token_id, metadata=metadata)
+        client = self._kalshi()
+        cfg = self.execution
+
+        book = client.get_orderbook(token_id) if token_id else {}
+        limit_cents = compute_limit_price_cents(
+            book, order.price, cfg.order_style, cfg.cross_spread_fallback_offset_cents
+        )
+        limit_prob = max(0.01, min(0.99, limit_cents / 100.0))
+        requested = max(1, int(order.size / limit_prob))
+
+        resp = client.place_limit_order(
+            token_id, requested, limit_cents, self._client_order_id(token_id)
+        )
+        order_obj = resp.get("order", resp) or {}
+        order_id = str(order_obj.get("order_id") or order_obj.get("id") or "")
+
+        parsed = self._await_fill(client, order_id, order_obj, requested)
+        avg_prob = (
+            parsed.avg_cents / 100.0 if parsed.avg_cents is not None else limit_prob
+        )
+        avg_prob = max(0.01, min(0.99, avg_prob))
+        actual_size = round(avg_prob * parsed.filled, 4)
+        if parsed.filled <= 0:
+            status = "unfilled"
+        elif parsed.remaining > 0:
+            status = "partial"
+        else:
+            status = "filled"
+
+        fill = Fill(
+            ts=self._clock(),
+            side=order.side,
+            size=actual_size,
+            price=avg_prob,
+            model_p=order.model_p,
+            edge=order.edge,
+            mode=self.mode,
+            token_id=token_id,
+            order_id=order_id,
+            status=status,
+            requested_count=requested,
+            filled_count=parsed.filled,
+            avg_price=avg_prob,
+            **_fill_metadata(metadata),
+        )
+        return self._record(fill)
 
 
 def paper_gate_status(config: Config, paper_ledger_path: str | None = None) -> tuple[bool, str]:
@@ -166,5 +279,5 @@ def make_executor(
     """Returns live executor only when safety switches, keys, and paper proof pass."""
     proof_ok, _reason = paper_gate_status(config, paper_ledger_path)
     if config.live_enabled and secrets.kalshi_complete and proof_ok:
-        return KalshiLiveExecutor(secrets)
+        return KalshiLiveExecutor(secrets, config.execution)
     return PaperExecutor(ledger_path=paper_ledger_path)

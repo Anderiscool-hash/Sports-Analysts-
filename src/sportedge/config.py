@@ -37,6 +37,74 @@ class PaperGateConfig(BaseModel):
     min_total_pnl: float = 0.0
 
 
+class ExecutionConfig(BaseModel):
+    """How live orders are priced and how long they may rest before auto-cancel.
+
+    Borrowed from Krypt-Trader's order mechanics: in a score-lag snipe the edge is
+    gone in seconds, so an unfilled order must cancel itself rather than sit and
+    fill *after* the market has already corrected.
+    """
+
+    # "market" -> cross immediately; "limit_cross" -> sit at the best opposing
+    # quote; "limit_mid" -> rest at the book midpoint (best price, slowest fill).
+    order_style: str = "limit_cross"
+    # Cancel a resting order this many seconds after placement (0 disables).
+    order_expiration_sec: int = 8
+    # If the live order book can't be read, fall back to the signal price nudged by
+    # this many cents in the aggressive direction so a BUY still clears.
+    cross_spread_fallback_offset_cents: int = 2
+    # How often (seconds) to poll a resting order for fills before expiry.
+    fill_poll_seconds: float = 1.0
+
+
+class RiskConfig(BaseModel):
+    """Runtime exposure caps and circuit breakers checked before every live order.
+
+    All fractions are of current bankroll. These gate *new entries only*; they never
+    touch existing positions. Paper mode ignores them.
+    """
+
+    enabled: bool = True
+    # Stop opening new positions once total staked exposure reaches this fraction.
+    max_total_exposure_fraction: float = 0.50
+    # Always keep at least this fraction of bankroll in reserve (never staked).
+    min_cash_reserve_fraction: float = 0.10
+    # Hard ceiling on the number of simultaneously open positions.
+    max_open_positions: int = 5
+    # At most this many open positions per ESPN event (1 = one bet per game).
+    max_positions_per_event: int = 1
+    # Daily realized-PnL circuit breakers (USD). Loss is negative.
+    daily_loss_cap: float = -20.0
+    daily_take_profit: float = 0.0  # 0 disables the take-profit halt
+    # Trading-hours window (local clock). Disabled by default for live sports.
+    trading_hours_enabled: bool = False
+    trading_hours_start: str = "00:00"
+    trading_hours_end: str = "23:59"
+    trading_timezone_offset_min: int = 0
+
+
+class FlowConfig(BaseModel):
+    """Optional Kalshi trade-feed confirmation layered on top of the model signal.
+
+    Borrowed from Krypt-Trader's whale / momentum scanning, but used only to
+    *confirm* a model-edge entry, never to originate one. ``mode="off"`` (default)
+    leaves behavior unchanged; ``mode="confirm"`` requires the trade feed to show a
+    whale trade or a contrarian sell-off before a model signal is allowed to fire.
+    """
+
+    mode: str = "off"  # "off" | "confirm"
+    # Window of recent trades to consider.
+    lookback_sec: int = 120
+    # A single trade worth >= this many USD counts as a whale (count * price).
+    whale_min_notional: float = 250.0
+    # Contrarian: a YES-price drop of at least this (prob units) over the window
+    # signals an overreaction worth fading (i.e. confirms buying the bottom).
+    price_move_threshold: float = 0.05
+    # A trade cluster needs at least this many trades and this much total USD.
+    cluster_min_trades: int = 3
+    cluster_min_notional: float = 100.0
+
+
 class MarketConfig(BaseModel):
     """An NBA game market on Kalshi: a single YES contract for the home team to win."""
 
@@ -82,6 +150,9 @@ class Config(BaseModel):
     loop: LoopConfig = LoopConfig()
     model: ModelConfig = ModelConfig()
     paper_gate: PaperGateConfig = PaperGateConfig()
+    execution: ExecutionConfig = ExecutionConfig()
+    risk: RiskConfig = RiskConfig()
+    flow: FlowConfig = FlowConfig()
     market: MarketConfig = MarketConfig()
     soccer: SoccerMarketConfig = SoccerMarketConfig()
 

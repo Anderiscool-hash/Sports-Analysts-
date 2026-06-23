@@ -532,10 +532,128 @@ class KalshiClient:
         }
 
     def place_order(self, ticker: str, stake_usd: float, price_prob: float) -> dict:
-        """Submit a signed limit order. Caller is responsible for all safety gating."""
-        path = "/portfolio/orders"
-        payload = self.build_order_payload(ticker, stake_usd, price_prob)
-        headers = self.auth_headers("POST", path)
-        resp = requests.post(f"{self.host}{path}", json=payload, headers=headers, timeout=15)
+        """Submit a signed limit BUY order from a USDC stake. Caller owns all gating.
+
+        Thin wrapper over the v2 ``place_limit_order``: turns a USDC stake into a
+        whole-contract count at the given probability/price.
+        """
+        price_cents = max(1, min(99, round(price_prob * 100)))
+        count = max(1, int(stake_usd / max(price_prob, 0.01)))
+        return self.place_limit_order(ticker, count, price_cents)
+
+    # ----- trade feed (no auth) -----
+    def get_trades(self, ticker: str, limit: int = 100) -> list[dict]:
+        """Recent public trades for a market, newest first. Returns ``[]`` on error.
+
+        Feeds the optional whale / momentum confirmation scanner. No auth required.
+        """
+        try:
+            data = self._get("/markets/trades", {"ticker": ticker, "limit": limit})
+        except Exception:  # noqa: BLE001 - confirmation is best-effort
+            return []
+        return data.get("trades", []) or []
+
+    # ----- order book (no auth) -----
+    def get_orderbook(self, ticker: str, depth: int = 10) -> dict:
+        """Live resting-order book for a contract: ``{"yes": [[c, n]], "no": [...]}``.
+
+        Returns ``{}`` on error so the execution policy degrades to its fallback
+        price rather than refusing to trade.
+        """
+        try:
+            data = self._get(f"/markets/{ticker}/orderbook", {"depth": depth})
+        except Exception:  # noqa: BLE001 - book is best-effort; caller has a fallback
+            return {}
+        # Kalshi returns either "orderbook" (cents) or "orderbook_fp" (dollars).
+        return data.get("orderbook") or data.get("orderbook_fp") or data or {}
+
+    # ----- signed portfolio requests (auth) -----
+    def _auth_request(
+        self,
+        method: str,
+        subpath: str,
+        *,
+        params: dict | None = None,
+        json_body: dict | None = None,
+        timeout: int = 15,
+    ) -> dict:
+        """Signed request against ``/portfolio`` style endpoints.
+
+        The RSA-PSS signature must cover the *full* request path including the
+        ``/trade-api/v2`` prefix, so we sign against the host's path component and
+        send to the bare scheme+host (matching ``get_candlesticks``).
+        """
+        from urllib.parse import urlsplit
+
+        parts = urlsplit(self.host)
+        base = f"{parts.scheme}://{parts.netloc}"
+        full_path = f"{parts.path}{subpath}"
+        headers = self.auth_headers(method, full_path)
+        resp = requests.request(
+            method,
+            base + full_path,
+            params=params or None,
+            json=json_body,
+            headers=headers,
+            timeout=timeout,
+        )
         resp.raise_for_status()
-        return resp.json()
+        return resp.json() if resp.content else {}
+
+    def place_limit_order(
+        self,
+        ticker: str,
+        count: int,
+        price_cents: int,
+        client_order_id: str = "",
+        time_in_force: str = "good_till_canceled",
+        expiration_ts: int | None = None,
+    ) -> dict:
+        """Submit a signed limit BUY of ``count`` YES shares at ``price_cents``.
+
+        Uses Kalshi's **v2** create-order endpoint (``POST /portfolio/events/orders``);
+        the v1 ``/portfolio/orders`` create was retired. Buying YES is ``side="bid"``;
+        ``count`` and ``price`` are fixed-point strings (``"1.00"``, dollars
+        ``"0.0100"``). ``time_in_force`` of ``immediate_or_cancel`` makes the order
+        fill-now-or-cancel (the natural score-lag snipe); ``good_till_canceled`` rests
+        until our expiry/cancel logic pulls it. Caller owns all safety gating.
+        """
+        price_cents = max(1, min(99, int(price_cents)))
+        payload: dict[str, object] = {
+            "ticker": ticker,
+            "side": "bid",  # buying YES
+            "count": f"{max(1, int(count))}.00",
+            "price": f"{price_cents / 100:.4f}",
+            "time_in_force": time_in_force,
+            "self_trade_prevention_type": "taker_at_cross",
+        }
+        if client_order_id:
+            payload["client_order_id"] = client_order_id
+        if expiration_ts is not None and time_in_force == "good_till_canceled":
+            payload["expiration_time"] = int(expiration_ts)
+        return self._auth_request("POST", "/portfolio/events/orders", json_body=payload)
+
+    def get_order(self, order_id: str) -> dict:
+        """Signed lookup of a single order (status + fill counts), or ``{}``."""
+        if not order_id:
+            return {}
+        return self._auth_request("GET", f"/portfolio/orders/{order_id}").get("order", {})
+
+    def cancel_order(self, order_id: str) -> dict:
+        """Cancel a resting order through Kalshi's v2 event-order endpoint.
+
+        The response is flat: ``order_id``, ``client_order_id``, ``reduced_by``,
+        and ``ts_ms``. A 404 (already gone/filled) is swallowed so expiry cleanup
+        never raises.
+
+        The legacy ``DELETE /portfolio/orders/{id}`` endpoint may accept a request
+        without canceling v2 event orders, so it must not be used here.
+        """
+        if not order_id:
+            return {}
+        try:
+            return self._auth_request("DELETE", f"/portfolio/events/orders/{order_id}")
+        except requests.HTTPError as exc:  # already filled/canceled -> nothing to do
+            if exc.response is not None and exc.response.status_code == 404:
+                return {}
+            raise

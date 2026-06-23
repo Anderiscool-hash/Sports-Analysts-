@@ -13,6 +13,8 @@ from rich.console import Console
 from rich.table import Table
 
 from sportedge.betting.executor import make_executor, paper_gate_status
+from sportedge.betting.flow import detect_flow
+from sportedge.betting.risk import RiskManager, state_from_fills
 from sportedge.betting.strategy import Strategy
 from sportedge.config import load_config, load_secrets
 from sportedge.data.isports import get_live_state as get_isports_live_state
@@ -81,6 +83,7 @@ def run(
     )
     detector = BottomDetector(cfg.edge.dip_threshold, cfg.edge.min_edge, cfg.edge.rebound_ticks)
     executor = make_executor(cfg, secrets, paper_ledger_path=paper_ledger)
+    risk_manager = RiskManager(cfg.risk)
     proof_ok, proof_reason = paper_gate_status(cfg, paper_ledger)
 
     console.rule(
@@ -123,18 +126,35 @@ def run(
                 console.print(f"[yellow]price fetch failed: {exc}[/]")
 
         placed = ""
+        blocked = ""
         if price is not None:
             sig = detector.update(price, model_p)
             order = strategy.decide(sig)
-            if order and executor.staked + order.size <= cfg.bankroll:
-                fill = executor.place(
-                    order,
-                    token_id or "",
-                    metadata=paper_metadata(cfg),
+            if order:
+                meta = paper_metadata(cfg)
+                decision = risk_manager.check(
+                    order_size=order.size,
+                    token_id=token_id or "",
+                    event_id=meta["event_id"],
+                    state=state_from_fills(executor.fills, cfg.bankroll),
                 )
-                placed = f"BUY {fill.size:.2f}@{fill.price:.3f}"
+                if not decision.allowed:
+                    blocked = decision.reason
+                else:
+                    flow_ok = True
+                    if cfg.flow.mode == "confirm" and token_id:
+                        flow = detect_flow(client.get_trades(token_id), cfg.flow)
+                        flow_ok = flow.confirms_buy
+                        if not flow_ok:
+                            blocked = f"flow: {flow.reason}"
+                    if flow_ok:
+                        fill = executor.place(order, token_id or "", metadata=meta)
+                        placed = (
+                            f"BUY {fill.size:.2f}@{fill.price:.3f}"
+                            + (f" [{fill.status}]" if fill.status not in ("", "paper") else "")
+                        )
 
-        _render(state, model_p, price, executor, placed)
+        _render(state, model_p, price, executor, placed, blocked)
 
         if state.is_final:
             console.rule("[bold]Game final[/]")
@@ -142,7 +162,7 @@ def run(
         time.sleep(cfg.loop.poll_seconds)
 
 
-def _render(state, model_p, price, executor, placed: str) -> None:
+def _render(state, model_p, price, executor, placed: str, blocked: str = "") -> None:
     t = Table(show_header=False, box=None)
     t.add_row("score", f"{state.home_team} {state.home_score}-{state.away_score} {state.away_team}")
     t.add_row("clock", f"Q{state.period}  {state.seconds_remaining:.0f}s left (reg)")
@@ -153,6 +173,8 @@ def _render(state, model_p, price, executor, placed: str) -> None:
     t.add_row("staked", f"{executor.staked:.2f} ({len(executor.fills)} fills)")
     if placed:
         t.add_row("[green]ORDER[/]", placed)
+    if blocked:
+        t.add_row("[yellow]risk block[/]", blocked)
     console.print(t)
 
 
